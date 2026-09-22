@@ -24,6 +24,8 @@ dependencies = [
     "pydantic-settings>=2.5",
     "pint>=0.24",
     "matplotlib>=3.9",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
