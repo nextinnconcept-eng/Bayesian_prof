@@ -66,3 +66,8 @@ def get_config() -> Config:
 def clear_config_cache() -> None:
     """Test-only: drop the cached Config so env/.env changes are re-read."""
     get_config.cache_clear()
+
+
+def resolve_path(path: Path) -> Path:
+    """Resolve a config path against the repository root if it isn't already absolute."""
+    return path if path.is_absolute() else REPO_ROOT / path

@@ -20,6 +20,9 @@ data/raw/
 # MLflow
 mlruns/
 
+# Runtime logs
+logs/
+
 # Tooling caches
 .mypy_cache/
 .pytest_cache/
