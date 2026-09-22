@@ -11,6 +11,7 @@ overrides them, to flatten/unflatten its nested target_parameters.
 
 from __future__ import annotations
 
+import builtins
 from typing import Any, Generic, TypeVar
 from uuid import UUID
 
@@ -62,6 +63,25 @@ class Repository(Generic[DomainT, ORMT]):
 
     def list(self) -> list[DomainT]:
         rows = self._session.query(self.orm_cls).all()
+        return [self._to_domain(row) for row in rows]
+
+    def filter(self, **filters: Any) -> builtins.list[DomainT]:
+        """Look up every row matching arbitrary column filters (e.g. all
+        PhotovoltaicMeasurements for a device_id) -- unlike get_one(),
+        never raises on more than one match, since several entities
+        (repeat J-V scans, multiple EIS attempts) legitimately can have
+        more than one row per foreign key.
+
+        Return type is builtins.list[DomainT], fully qualified, on
+        purpose: this class already defines a method named `list`, and
+        mypy resolves a bare `list[...]` annotation appearing after that
+        definition to the METHOD, not the builtin generic -- a real,
+        confirmed mypy quirk, not a runtime issue (this module uses
+        `from __future__ import annotations`, so annotations are never
+        evaluated at runtime), but it breaks static type-checking for
+        every caller of this method.
+        """
+        rows = self._session.query(self.orm_cls).filter_by(**filters).all()
         return [self._to_domain(row) for row in rows]
 
     def exists(self, **filters: Any) -> bool:
