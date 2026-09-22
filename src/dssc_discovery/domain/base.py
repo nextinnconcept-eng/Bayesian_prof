@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dssc_discovery.domain.enums import MissingValueReason
+
 
 class ProvenancedModel(BaseModel):
     """Base for every domain entity.
@@ -27,3 +29,17 @@ class ProvenancedModel(BaseModel):
     is_synthetic: bool = False
     experiment_version: str = "v1"
     notes: str = ""
+
+
+class MeasurementProvenancedModel(ProvenancedModel):
+    """Adds fields that only make sense for an actual instrument
+    measurement, not a procedural/preparation record (PlantSample,
+    PigmentExtractBatch, ...). Numeric result fields on subclasses should
+    stay Optional with missing_value_reason explaining absence, rather
+    than silently defaulting to 0 -- e.g. a non-convergent EIS fit.
+    """
+
+    instrument: str = Field(min_length=1)
+    raw_data_reference: str | None = None
+    measurement_uncertainty: float | None = Field(default=None, ge=0)
+    missing_value_reason: MissingValueReason | None = None
