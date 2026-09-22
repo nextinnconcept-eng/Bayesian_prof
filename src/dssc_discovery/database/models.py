@@ -68,6 +68,31 @@ class GUID(TypeDecorator):
         return uuid_module.UUID(str(value))
 
 
+class UTCDateTime(TypeDecorator):
+    """Timezone-aware datetime that actually round-trips: verified
+    empirically that plain sa.DateTime -- even with timezone=True -- comes
+    back naive (tzinfo=None) on SQLite, silently dropping the UTC tag every
+    domain object's created_at carries. Strips tzinfo on the way in
+    (storing a UTC-equivalent naive value) and reattaches UTC on the way
+    out.
+    """
+
+    impl = sa.DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value: object, dialect: object) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            return value.astimezone(UTC).replace(tzinfo=None)
+        return value  # type: ignore[return-value]
+
+    def process_result_value(self, value: object, dialect: object) -> datetime | None:
+        if value is None or not isinstance(value, datetime):
+            return None
+        return value.replace(tzinfo=UTC)
+
+
 def _str_enum(enum_cls: type[StrEnum], length: int = 50) -> sa.Enum:
     """A native_enum=False Enum column that stores member.value (e.g.
     "Telfairia occidentalis"), not member.name (e.g.
@@ -93,7 +118,7 @@ class ProvenanceMixin:
     id: Mapped[uuid_module.UUID] = mapped_column(
         GUID(), primary_key=True, default=uuid_module.uuid4
     )
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(UTC))
     operator: Mapped[str] = mapped_column(sa.String(200))
     is_synthetic: Mapped[bool] = mapped_column(default=False)
     experiment_version: Mapped[str] = mapped_column(sa.String(50), default="v1")

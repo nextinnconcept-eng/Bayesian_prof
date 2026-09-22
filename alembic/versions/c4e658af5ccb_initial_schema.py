@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: cf3d8f13f931
+Revision ID: c4e658af5ccb
 Revises:
-Create Date: 2026-09-22 21:53:57.477064
+Create Date: 2026-09-22 22:15:13.423833
 
 """
 
@@ -14,7 +14,7 @@ import dssc_discovery.database.models
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "cf3d8f13f931"
+revision: str = "c4e658af5ccb"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -45,7 +45,7 @@ def upgrade() -> None:
         ),
         sa.Column("protocol_reference", sa.String(length=300), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -71,7 +71,7 @@ def upgrade() -> None:
         sa.Column("common_name", sa.String(length=200), nullable=False),
         sa.Column("family", sa.String(length=200), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -172,7 +172,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -243,7 +243,7 @@ def upgrade() -> None:
         sa.Column("authentication_method", sa.String(length=300), nullable=False),
         sa.Column("voucher_id", sa.String(length=100), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -302,7 +302,7 @@ def upgrade() -> None:
         ),
         sa.Column("device_batch_code", sa.String(length=100), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -362,7 +362,7 @@ def upgrade() -> None:
         sa.Column("extraction_yield_percent", sa.Float(), nullable=True),
         sa.Column("protocol_reference", sa.String(length=300), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -424,7 +424,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -460,7 +460,7 @@ def upgrade() -> None:
         sa.Column("sensitization_temperature_c", sa.Float(), nullable=False),
         sa.Column("treatment_notes", sa.Text(), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -496,7 +496,7 @@ def upgrade() -> None:
         sa.Column("processing_version", sa.String(length=50), nullable=False),
         sa.Column("algorithm", sa.String(length=200), nullable=False),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -555,7 +555,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -621,7 +621,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),
@@ -680,7 +680,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("id", dssc_discovery.database.models.GUID(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", dssc_discovery.database.models.UTCDateTime(), nullable=False),
         sa.Column("operator", sa.String(length=200), nullable=False),
         sa.Column("is_synthetic", sa.Boolean(), nullable=False),
         sa.Column("experiment_version", sa.String(length=50), nullable=False),

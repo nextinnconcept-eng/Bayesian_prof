@@ -13,27 +13,13 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from dssc_discovery.database.models import (
-    Base,
     PigmentExtractBatchORM,
     PlantSampleORM,
     SpeciesORM,
 )
 from dssc_discovery.domain.enums import PigmentClass, PlantPart, SolventType, SpeciesCode
 
-
-@pytest.fixture
-def engine():
-    eng = sa.create_engine("sqlite://")
-
-    @sa.event.listens_for(eng, "connect")
-    def _enable_fk(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(eng)
-    yield eng
-    eng.dispose()
+# engine fixture comes from tests/conftest.py (shared across all database tests)
 
 
 def _make_species(session: Session, code: SpeciesCode = SpeciesCode.BETA_VULGARIS) -> SpeciesORM:
