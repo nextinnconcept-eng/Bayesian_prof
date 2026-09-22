@@ -41,7 +41,13 @@ ILLUMINATION_POWER_MW_CM2: dict[IlluminationProtocol, float] = {
 _VECTOR_FIELD_REL_TOL = 1e-6
 
 
-def _vectors_match(a: ExperimentalConditionVector, b: ExperimentalConditionVector) -> bool:
+def vectors_match(a: ExperimentalConditionVector, b: ExperimentalConditionVector) -> bool:
+    """True if two parameter vectors match within floating-point
+    tolerance -- exported (not just used internally) because ingestion
+    (Chunk 1.7) needs the identical check for its own get-or-create
+    dedup logic (reusing an existing condition_code vs. rejecting a
+    conflicting reuse of one).
+    """
     a_data, b_data = a.model_dump(), b.model_dump()
     for field, a_value in a_data.items():
         b_value = b_data[field]
@@ -67,7 +73,7 @@ def check_duplicate_condition(
             continue
         if existing.species_code != condition.species_code:
             continue
-        if _vectors_match(existing.target_parameters, condition.target_parameters):
+        if vectors_match(existing.target_parameters, condition.target_parameters):
             raise DuplicateConditionError(
                 f"ExperimentalCondition {condition.condition_code!r} matches "
                 f"existing condition {existing.condition_code!r} "

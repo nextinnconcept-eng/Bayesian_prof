@@ -37,13 +37,27 @@ class Repository(Generic[DomainT, ORMT]):
         return self.domain_cls.model_validate(data)
 
     def add(self, domain_obj: DomainT) -> DomainT:
+        """Stage and flush (not commit) domain_obj. Flush is enough for
+        this row to be visible to later reads on the same session -- the
+        caller owns the transaction boundary and decides when to commit,
+        so multi-entity operations (e.g. CSV ingestion, Chunk 1.7) can
+        stage several adds and commit them atomically, or roll all of
+        them back together on failure.
+        """
         orm_obj = self._to_orm(domain_obj)
         self._session.add(orm_obj)
-        self._session.commit()
+        self._session.flush()
         return self._to_domain(orm_obj)
 
     def get(self, id: UUID) -> DomainT | None:
         orm_obj = self._session.get(self.orm_cls, id)
+        return self._to_domain(orm_obj) if orm_obj is not None else None
+
+    def get_one(self, **filters: Any) -> DomainT | None:
+        """Look up a single row by arbitrary column filters (e.g. a
+        natural key like condition_code) rather than by primary key.
+        """
+        orm_obj = self._session.query(self.orm_cls).filter_by(**filters).one_or_none()
         return self._to_domain(orm_obj) if orm_obj is not None else None
 
     def list(self) -> list[DomainT]:
