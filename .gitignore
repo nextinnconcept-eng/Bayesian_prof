@@ -11,8 +11,9 @@ venv/
 # Environment / secrets
 .env
 
-# Data (raw instrument data and dev DB are not committed)
+# Data (raw instrument data, dev DB, and backups are not committed)
 data/raw/
+data/backups/
 *.db
 *.sqlite
 *.sqlite3
