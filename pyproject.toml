@@ -8,6 +8,32 @@ version = "0.0.1"
 description = "Closed-loop ML/BO platform for natural-pigment DSSC discovery"
 requires-python = ">=3.11"
 readme = "README.md"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "xgboost>=2.0",
+    "shap>=0.46",
+    "gpytorch>=1.13",
+    "botorch>=0.12",
+    "mlflow>=2.16",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "pint>=0.24",
+    "matplotlib>=3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+]
+ui = [
+    "streamlit>=1.38",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
