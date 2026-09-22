@@ -32,6 +32,10 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-cov>=5.0",
+    "ruff>=0.8",
+    "black>=24.10",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
 ]
 ui = [
     "streamlit>=1.38",
@@ -39,3 +43,32 @@ ui = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+# Matches the actual dev/CI runtime (3.13), not requires-python's 3.11
+# floor -- pinning this to 3.11 makes mypy fail to parse 3.12+ syntax
+# inside third-party packages (e.g. pint) rather than just checking our
+# code. Ruff's target-version = "py311" still guards our own code's
+# compatibility with the 3.11 floor.
+python_version = "3.13"
+ignore_missing_imports = true
+follow_imports = "silent"
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_unused_ignores = true
+exclude = ["^\\.venv/"]

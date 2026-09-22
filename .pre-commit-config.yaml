@@ -1,0 +1,25 @@
+# Local hooks calling the project's own pinned venv tools directly, rather
+# than external mirror repos -- guarantees the same ruff/black/mypy
+# versions run here as in CI (see requirements-lock.txt), with no
+# dependency on a mirror repo's git tags existing/matching.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: python -m ruff check --fix
+        language: system
+        types: [python]
+
+      - id: black-format
+        name: black format
+        entry: python -m black
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy (lenient)
+        entry: python -m mypy src
+        language: system
+        types: [python]
+        pass_filenames: false

@@ -76,9 +76,7 @@ def test_species_code_and_closed_loop_state_have_no_other_escape_hatch():
     assert "OTHER" not in {member.name for member in DesignSource}
 
 
-@pytest.mark.parametrize(
-    "enum_cls", [PlantPart, PigmentClass, SolventType, SurfaceTreatment]
-)
+@pytest.mark.parametrize("enum_cls", [PlantPart, PigmentClass, SolventType, SurfaceTreatment])
 def test_lab_entry_enums_have_other_escape_hatch(enum_cls):
     assert "OTHER" in {member.name for member in enum_cls}
 

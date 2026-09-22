@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from dssc_discovery.config import Config, clear_config_cache, get_config
+from dssc_discovery.config import clear_config_cache, get_config
 
 
 @pytest.fixture(autouse=True)
