@@ -1,0 +1,1926 @@
+ARCHITECTURE & DEVELOPMENT PLAN
+Closed-Loop Natural-Pigment DSSC Discovery Platform
+=====================================================
+
+Planning only. No code, no scaffolding, no git init yet. Where the original
+spec had a weak assumption, it is flagged and an alternative proposed —
+clearly marked so it can be overruled.
+
+=====================================================
+A. SYSTEM UNDERSTANDING
+=====================================================
+
+The actual contribution here is NOT "an ML dashboard for solar cells." It's a
+provenance-preserving experimental design system: a database and software
+architecture that lets a small (~70-85 condition), expensive, slow-to-generate
+dataset be used safely for both scientific inference (papers 1-3) and
+sequential decision-making (papers 4-6), without those two uses contaminating
+each other.
+
+The hard problem is not "train a regressor for PCE." It's:
+
+1. Keeping raw measurement, derived descriptor, experimental condition, and
+   device replicate as distinct, traceable entities so that a 3-replicate
+   small-N dataset doesn't silently leak across train/test splits.
+2. Making the Bayesian optimizer's recommendations auditable — every proposed
+   experiment must be reconstructable from a specific model version, dataset
+   snapshot, and acquisition function state.
+3. Treating synthetic data (needed to test the closed loop before risking
+   real lab time) as radioactive — clearly separated from real data at the
+   schema level, not just by convention.
+4. Accepting that N≈70-85 is small enough that naive use of RF/XGBoost + SHAP
+   will produce confident-looking nonsense unless CV, feature count, and
+   grouping are all disciplined from day one.
+
+So: this is a data-integrity and decision-provenance system first, with
+ML/BO as consumers of that system, and a dashboard as the last, thinnest
+layer.
+
+=====================================================
+B. SCIENTIFIC WORKFLOW
+=====================================================
+
+[Plant Collection/Authentication]
+        |
+[Pigment Extraction]  --solvent, ratio, pH, T, t--> PigmentExtractBatch
+        |
+[Chemical Characterization]  (FTIR, HPLC/LC-MS)  --> RawSpectrum --> DerivedDescriptor
+[Optical Characterization]   (UV-Vis)             --> RawSpectrum --> DerivedDescriptor (lambda_max, bandwidth, integrated absorption)
+        |
+[Photoanode Fabrication]  (TiO2 thickness, sintering) --> PhotoanodeFabricationBatch
+        |
+[Sensitization]  (adsorption time, dye loading, T) ----> SensitizationRun
+        |
+[Device Assembly]  --> Device (replicate N of ExperimentalCondition C)
+        |
+[Electrochemical/EIS]  --> RawSpectrum(EIS) --> DerivedDescriptor (Rs, Rct, Rrec, tau_e)
+[Photovoltaic J-V]     --> RawCurve(JV)     --> PhotovoltaicMeasurement (Voc, Jsc, FF, PCE)
+[Stability/Ageing]     --> repeated PhotovoltaicMeasurement over time --> StabilityMeasurement (retention %)
+        |
+[Data Validation]  (units, physical bounds, duplicates, provenance completeness)
+        |
+[MLDataset assembly]  (versioned, feature set, group keys for leakage-safe CV)
+        |
+[ML Training + Evaluation]  (baselines, nested/grouped CV, uncertainty)
+        |
+[SHAP / XAI]  (global + local, association only)
+        |
+[Bayesian Optimization]  (GP surrogate, constrained mixed search space, acquisition)
+        |
+[Recommendation]  PROPOSED -> APPROVED (human) -> back to top of loop as a new ExperimentalCondition
+
+Every box on the top half (plant -> PV/stability measurement) is wet-lab,
+human-paced. Everything from "Data Validation" down is software, this
+project's actual scope. The loop closes at "APPROVED", which re-enters the
+top half — the software never fabricates anything itself.
+
+=====================================================
+C. REQUIREMENTS ANALYSIS
+=====================================================
+
+ESSENTIAL (blocks any scientific claim)
+- Domain models + relational schema distinguishing condition/replicate/
+  measurement/derived-descriptor, with full provenance columns.
+- Data validation layer (physical bounds, unit consistency, duplicate
+  detection, no silent zero-fill).
+- Raw-data immutability + traceable derived descriptors.
+- Leakage-safe ML evaluation (grouped/nested CV, baselines, documented A/B/C
+  validation strategies).
+- Reproducibility ledger (dataset version, feature set version, model run,
+  seed, code version).
+- SHAP-based XAI with explicit "association != causation" labeling in every
+  output.
+- Single-objective (PCE) BO with a constrained, mixed-type search space, per
+  species.
+- Closed-loop state machine with an explicit human-approval gate.
+- A synthetic-objective closed-loop test that exercises the entire pipeline
+  before any real recommendation is trusted.
+
+DESIRABLE (strengthens papers, not blocking)
+- Multi-objective (PCE + stability) Pareto optimization.
+- Cross-species leave-one-out generalization study.
+- Automated raw-spectrum -> descriptor pipelines (auto lambda_max extraction,
+  EIS equivalent-circuit fitting).
+- Streamlit research dashboard.
+- Automated report/figure generation for manuscripts.
+
+FUTURE/ADVANCED (do not build now, may never be needed)
+- Deep learning of any kind — explicitly rejected at this N; revisit only if
+  N grows past ~300-500 with strong regularization justification.
+- Batch/parallel BO (proposing >1 experiment per cycle with diversity
+  constraints) — only worth it if lab throughput actually supports parallel
+  fabrication.
+- LIMS/instrument-direct integration, multi-lab federation, active-learning
+  beyond standard BO.
+
+=====================================================
+D. ARCHITECTURE
+=====================================================
+
+Strict layering, dependency arrows point inward only:
+
+        UI (Streamlit)  -+
+        Reports/Figures  -+--> depends on --> Application/Orchestration (closed_loop)
+        Notebooks        -+                              |
+                                                            v
+                                         Optimization | Explainability | Evaluation | Models
+                                                            |
+                                                            v
+                                          Features | Preprocessing | Chemistry (descriptor derivation)
+                                                            |
+                                                            v
+                                              Domain models (pure, no DB/ML/UI deps)
+                                                            |
+                                                            v
+                                     Database (SQLAlchemy) | Validation | Ingestion
+
+Rules that make this real, not aspirational:
+- Domain layer = Pydantic models representing scientific entities
+  (ExperimentalCondition, Device, Measurement, etc.). Zero imports from
+  SQLAlchemy, scikit-learn, or Streamlit. These double as the data contracts
+  in Section G.
+- ML/BO packages import only numpy/pandas/domain models — never sqlalchemy,
+  never streamlit. This is what lets you literally run
+  `python scripts/run_bo_cycle.py` from a terminal, which the spec requires
+  (section 10).
+- Repository pattern sits between SQLAlchemy ORM rows and domain Pydantic
+  objects — DB schema can evolve without ML code noticing.
+- Streamlit pages are read-only consumers of application-layer functions; no
+  business logic lives in ui/.
+
+=====================================================
+E. DATABASE DESIGN
+=====================================================
+
+The single most important correction to the originally proposed schema: it
+lists categories of information (extraction, chemical, optical, ...) but not
+the entities that carry them. Flattening everything onto one "pigment"
+record is exactly the leakage risk the spec asked to guard against. Here's
+the entity model:
+
+Entity                          | Grain                          | Key relationships
+---------------------------------------------------------------------------------------
+Species                         | one per taxon                  | reference table
+PlantSample                     | one collection event/voucher   | -> Species
+PigmentExtractBatch             | one extraction run             | -> PlantSample; solvent/pH/T/t/yield
+RawSpectrum                     | one instrument acquisition     | -> PigmentExtractBatch or -> Device (polymorphic source)
+                                 | (UV-Vis/FTIR/HPLC/LC-MS/EIS/JV)|
+DerivedDescriptor                | one computed value             | -> RawSpectrum (source), processing_version, algorithm
+PhotoanodeFabricationBatch       | one TiO2 prep run              | thickness, sintering T/t, surface treatment
+SensitizationRun                 | one dye-loading process        | -> Device, -> PigmentExtractBatch; adsorption time/conc/T
+ExperimentalCondition (**)       | one DoE/BO "recipe"            | -> Species; embeds/references extraction+sensitization+
+                                 |                                 |    photoanode parameter vector; this is the unit BO optimizes
+Device (**)                      | one physical replicate         | -> ExperimentalCondition, -> PhotoanodeFabricationBatch,
+                                 |                                 |    -> SensitizationRun; replicate_number
+ElectrochemicalMeasurement (EIS) | one fit result                 | -> Device, -> RawSpectrum; Rs/Rct/Rrec/tau_e, circuit model
+PhotovoltaicMeasurement          | one J-V scan                   | -> Device; Voc/Jsc/FF/PCE, illumination protocol
+StabilityMeasurement             | one ageing timepoint           | -> Device, -> initial PhotovoltaicMeasurement; ageing
+                                 |                                 |    duration/conditions, retention %
+MLDatasetVersion                 | one frozen snapshot            | query definition hash, row/condition IDs included
+FeatureSetVersion                | one feature definition         | descriptor list, preprocessing pipeline spec, code hash
+ModelRun                         | one training run               | -> MLDatasetVersion, -> FeatureSetVersion; mlflow_run_id,
+                                 |                                 |    hyperparams, seed, metrics
+BOIteration                      | one BO cycle step              | -> ModelRun (surrogate), acquisition fn, search-space version
+Recommendation                   | one proposed experiment        | -> BOIteration; parameter vector, predicted objective +
+                                 |                                 |    uncertainty, acquisition value, state
+ClosedLoopStateLog                | audit trail                    | -> Recommendation; state transitions with timestamp/operator
+ValidationResult                  | outcome linkage                | -> Recommendation, -> resulting ExperimentalCondition/
+                                 |                                 |    measurements; predicted-vs-actual
+
+Why ExperimentalCondition vs Device matters concretely: the original spec
+already flagged (section 13) "~3 replicates per condition" — this schema is
+what makes that distinction load-bearing rather than cosmetic. All grouped CV
+(Section H) groups on experimental_condition_id, never on raw row. All BO
+recommendations ARE an ExperimentalCondition before any Device exists.
+
+Identifiers: every table gets a surrogate integer/UUID PK plus a
+human-readable code (e.g. BV-COND-014, TO-DEV-003-R2) generated at insert
+time — surrogate keys for joins, codes for lab notebooks and error messages.
+
+Provenance columns (shared mixin, not repeated ad hoc): operator, instrument,
+raw_data_reference, measurement_uncertainty, missing_value_reason,
+is_synthetic (boolean, defaults False, HARD-REQUIRED True on anything from
+the synthetic-objective test harness), created_at, experiment_version, notes.
+
+Units: store canonical SI-ish units as plain floats + a units_registry.py
+module documenting the canonical unit per field, with Pint used only at the
+ingestion boundary (converts whatever unit was entered to canonical, then
+discards the Pint quantity object). Running Pint quantities through
+pandas/sklearn pipelines is friction without benefit at this scale — flagged
+as a deliberate deviation from the original suggestion, low-risk either way.
+
+=====================================================
+F. REPOSITORY STRUCTURE
+=====================================================
+
+Bayesian_prof/
+  pyproject.toml
+  README.md
+  CHANGELOG.md
+  .env.example
+  .gitignore
+  config/
+    default.yaml
+  src/
+    dssc_discovery/
+      config.py
+      logging_setup.py
+      domain/                # pure Pydantic models, zero DB/ML/UI deps
+        species.py  extraction.py  device.py  measurements.py
+        experimental_condition.py  enums.py  units_registry.py
+      database/               # SQLAlchemy models, Alembic migrations, repositories
+      validation/              # business-rule validators (physical bounds, duplicates)
+      ingestion/                # CSV/manual entry -> domain -> DB
+      chemistry/                 # raw spectrum -> derived descriptor (uvvis.py, ftir.py, eis.py, jv.py)
+      features/                   # MLDataset assembly, group-key construction
+      preprocessing/                # sklearn Pipeline factories (impute/scale/encode) — unfit, fit only inside CV
+      models/                        # RF/XGBoost/GBR/GPR wrappers
+      evaluation/                     # CV strategies (A/B/C), leakage tests, learning curves, baselines
+      explainability/                  # SHAP wrappers, hypothesis-log templates
+      optimization/                     # search_space.py surrogate.py acquisition.py recommend.py multi_objective.py
+      closed_loop/                       # state machine, orchestration
+      stability/                          # ageing/retention analysis
+      reports/                             # figure/table generation for manuscripts
+      visualization/                        # matplotlib helpers, UI-agnostic
+  ui/streamlit_app/            # Home.py + pages/, imports dssc_discovery only
+  notebooks/
+  tests/{unit,integration,closed_loop_sim}/
+  scripts/{seed_reference_data.py, run_bo_cycle.py}
+  data/{raw/, processed/}      # raw/ gitignored or reference-only; nothing scientific lost if repo is wiped
+  mlruns/                       # gitignored MLflow store
+  docs/{architecture.md, adr/}
+
+src/-layout is deliberate: it forces `pip install -e .` and stops accidental
+imports of un-packaged scripts, which matters once scripts/run_bo_cycle.py
+needs to be trustworthy.
+
+=====================================================
+G. DATA CONTRACTS
+=====================================================
+
+Key schemas crossing module boundaries (Pydantic, versioned):
+
+- ExperimentalConditionVector — the object BO both reads (as a training
+  point) and writes (as a recommendation): species, extraction params
+  (solvent_ratio, pH, temperature_C, time_min), sensitization params
+  (adsorption_time_min, concentration_mM), photoanode params
+  (tio2_thickness_um, sintering_temperature_C, sintering_time_min). Explicit
+  bounds and dtype (continuous/discrete/categorical) per field.
+- MLDatasetRow — features (flat floats, post-canonicalization), target(s),
+  group_id = experimental_condition_id, replicate_id, sample_weight
+  (optional, e.g. down-weight singletons).
+- ModelPrediction — point estimate, std/interval, model_run_id, explicit
+  prediction_type: {interpolation, extrapolation} tag from Section H's
+  validation regime.
+- SHAPExplanation — feature, shap_value, base_value, model_run_id, and a
+  mandatory interpretation_caveat string field (forces the "not causal"
+  disclaimer to travel with the number, not just live in a README).
+- BORecommendation — ExperimentalConditionVector, predicted_objective,
+  predictive_uncertainty, acquisition_value, rationale_text (human-readable,
+  generated from acquisition function decomposition), state.
+
+=====================================================
+H. ML METHODOLOGY
+=====================================================
+
+Preprocessing: impute -> scale -> (optional) feature-selection, built as an
+UNFIT sklearn.Pipeline factory. It is fit inside each CV fold only — never
+globally before splitting. This is enforced by making the evaluation harness
+the only caller of .fit().
+
+Feature budget — the concrete guardrail the original spec was missing: at
+N≈70-85 conditions, a defensible ceiling is roughly N/10 features for tree
+ensembles (~7-8 features), more generously N/5 (~14) for regularized
+linear/GP models with a proper kernel. Feature selection must happen INSIDE
+each outer CV fold, never on the full dataset first — that's leakage even
+without touching the test rows' targets, because it uses their feature
+values.
+
+Validation strategy — three distinct, separately reported regimes (the spec
+asked for this explicitly; here's what each answers):
+
+Strategy               | Split                                            | Scientific question
+------------------------------------------------------------------------------------------------------------
+A. Interpolation        | Leave-One-Condition-Out (LOCO) CV, grouped by    | Given the explored region, how well does the model
+                        | experimental_condition_id                        | reconstruct known relationships? (Primary metric — LOCO
+                        |                                                    | maximizes training data at this N.)
+B. New conditions        | Time-ordered split: train on DoE + BO cycle      | Does the model, as it will actually be used, generalize
+   (forward extrapolation)| 1-2, test on BO cycle 3                         | to conditions it hasn't seen — the real operational test.
+C. Cross-species          | Leave-one-species-out, rotated                  | Has the model learned transferable chemistry-performance
+                        |                                                    | relationships or species-specific patterns? (Paper 7.)
+
+Report all three with repeated resampling (e.g. 10x repeated LOCO where
+feasible) and confidence intervals on MAE/RMSE — a single point-estimate R²
+at N=70 is not defensible.
+
+Baselines, mandatory: mean predictor, and a simple domain baseline (e.g.
+linear regression on lambda_max + dye loading alone) — every "real" model
+must beat both, reported side by side, always.
+
+Models: Ridge/Lasso, Random Forest, XGBoost, Gradient Boosting, and Gaussian
+Process Regression (GPyTorch) — GPR is not just for BO; run it as a
+candidate predictive model too, since at this N it's often the MOST
+appropriate, not a scalability risk (see Section Q).
+
+=====================================================
+I. XAI METHODOLOGY
+=====================================================
+
+SHAP wrapper picks explainer by model family: TreeExplainer for
+RF/XGBoost/GBR, KernelExplainer/permutation-based for GPR/linear (dataset is
+small enough that Kernel SHAP's cost is a non-issue). Outputs: global
+bar/beeswarm, local waterfall for any BO-recommended condition (explain why
+the surrogate favors it, distinct from the acquisition-value rationale),
+dependence plots, and interaction values flagged low-confidence given N.
+
+Hypothesis pipeline (this is the actual mechanism connecting SHAP to the lab,
+not just a diagram): every notable SHAP finding gets logged as a structured
+record — observation (e.g. "high dye-loading x long adsorption-time
+associated with higher PCE") -> candidate_mechanism (chemistry-grounded) ->
+confound_check (what else correlates with this combination in the dataset?)
+-> proposed_confirmatory_experiment -> status. This log is itself a table
+(HypothesisLog), not a paragraph in a notebook, so it survives into Paper 3's
+discussion section with full traceability.
+
+Every SHAP-derived artifact carries the interpretation_caveat field from
+Section G. No exceptions.
+
+=====================================================
+J. BAYESIAN OPTIMIZATION METHODOLOGY
+=====================================================
+
+Search space — per species, not joint. This is a deliberate simplification
+versus a fully joint species+continuous space: conditional feasibility (e.g.
+concentration ranges differ by plant, some sintering/surface-treatment
+combos are infeasible) is far easier to encode as N independent
+bounded/constrained continuous+categorical spaces than as one space with
+conditional parameters, which BoTorch doesn't natively support well.
+Cross-species knowledge transfer is handled by the ML/XAI side (Section H
+strategy C), not by the optimizer. If joint optimization is wanted later,
+it's an additive change, not a rewrite.
+
+- Variable types: continuous (pH, temperature, time, concentration,
+  thickness) with explicit bounds; discrete (sintering time in fixed
+  increments if the furnace only supports steps); categorical (solvent
+  choice, surface treatment) via MixedSingleTaskGP in BoTorch.
+- Constraints: linear inequality constraints (e.g. solvent ratio components
+  sum to 1), and known-infeasible combination exclusion applied at
+  acquisition-optimization time, not left to the GP to learn the hard way.
+- Surrogate: single-task GP per objective, Matern-5/2 kernel, standardized
+  outputs, log-transform of strictly-positive skewed variables (e.g.
+  concentration).
+- Acquisition: qLogNoisyExpectedImprovement (BoTorch's numerically stable
+  log-space EI variant) as default — plain qExpectedImprovement has known
+  vanishing-gradient issues in this size regime; this is a direct upgrade,
+  not a stylistic choice.
+- Initialization: the ~40-point initial DoE should be a constrained
+  space-filling design (Latin Hypercube respecting the feasibility
+  constraints above), not literally uniform random.
+- Stopping/convergence: no single test — report (a) predicted-improvement
+  decay across cycles, (b) plateau in best-observed PCE, (c) budget
+  exhaustion (3 planned cycles). Convergence is a judgment call made with
+  these three signals, documented in the BOIteration record, not automated.
+- Rationale text: every Recommendation stores a generated explanation
+  decomposing why: predicted mean, predictive std, and the acquisition
+  value's exploration/exploitation balance in plain language.
+
+One correction to the original stack list: Optuna is a hyperparameter-tuning
+tool (inner loop for RF/XGBoost hyperparameters during Section H's nested
+CV) — it is NOT the engine for the scientific closed loop. Conflating the
+two would mean using the wrong uncertainty model for lab-experiment
+recommendations. BoTorch/GPyTorch is the closed-loop engine; Optuna, if used
+at all, stays inside model training.
+
+=====================================================
+K. CLOSED-LOOP STATE MACHINE
+=====================================================
+
+PROPOSED --approve--> APPROVED --fabricate--> FABRICATED --measure--> MEASURED
+   |                     |                        |                     |
+   |reject                |fail                    |fail                 |validate
+   v                     v                        v                     v
+REJECTED           FAILED_FABRICATION       FAILED_MEASUREMENT      VALIDATED
+                                                                          |ingest
+                                                                          v
+                                                                     INGESTED
+                                                                          |retrain
+                                                                          v
+                                                                   MODEL_UPDATED
+
+Additional terminal state: SUPERSEDED — a PROPOSED recommendation
+invalidated because the surrogate was retrained (new data landed) before it
+was acted on; never silently discarded, always logged with the superseding
+BOIteration id. Every transition writes a ClosedLoopStateLog row with
+timestamp + operator — this is the audit trail that makes "the software
+never fabricates anything, a human always approves" (Section D) verifiable
+after the fact, not just a policy.
+
+=====================================================
+L. TESTING STRATEGY
+=====================================================
+
+Layer                | What's tested
+------------------------------------------------------------------------------
+Data validation        | physical bounds (PCE>=0, valid pH, FF range), unit
+                        | consistency, duplicate detection, missing-value
+                        | handling never silently zero-fills
+Preprocessing           | pipeline fit-on-train-only, correct handling of
+                        | NaN, no leakage of test-fold statistics
+Feature engineering      | MLDataset assembly produces correct group_ids,
+                        | versioned snapshots are immutable/reproducible
+Model pipeline            | deterministic given fixed seed; metrics computed
+                        | correctly against a hand-checked toy case
+Leakage tests               | explicit test that shuffling replicate rows
+                        | across a grouped split raises/fails; test that a
+                        | model trained ignoring groups scores implausibly
+                        | better than grouped CV (canary test)
+BO search space              | constraint satisfaction — sampled/optimized
+                        | points never violate bounds or linear constraints;
+                        | categorical handling round-trips correctly
+Closed-loop simulation         | full synthetic-objective loop runs
+                        | end-to-end, is_synthetic=True propagates
+                        | everywhere, state machine reaches MODEL_UPDATED
+Database                        | migrations apply cleanly on empty DB;
+                        | repository round-trips domain objects losslessly;
+                        | constraints (FKs, non-null provenance) actually
+                        | reject bad inserts
+Reproducibility                  | given a ModelRun id, re-running with its
+                        | recorded config produces bit-identical
+                        | (or documented-tolerance) metrics
+
+Synthetic closed-loop test (gate for M7): a known analytic function (e.g. a
+bounded multimodal function over the same parameter dimensionality,
+explicitly documented as NOT physically meaningful) stands in for "the lab."
+BO proposes -> synthetic function evaluates -> result flows through
+ingestion -> model retrains -> next recommendation. This must pass, with
+every synthetic row flagged is_synthetic=True, before Section J's engine
+ever touches real data.
+
+=====================================================
+M. REPRODUCIBILITY STRATEGY
+=====================================================
+
+Every ModelRun and BOIteration records: dataset_version_id,
+feature_set_version_id, git_commit_hash (captured via gitpython at run time
+— this is why git init is the literal first implementation task),
+hyperparameters, random_seed, MLflow run_id, timestamp, evaluation results.
+A Recommendation is fully reconstructable by joining
+BOIteration -> ModelRun -> MLDatasetVersion, answering the required question
+("what exact data/preprocessing/model produced this prediction") by query,
+not by memory.
+
+=====================================================
+N. DEVELOPMENT ROADMAP — CHUNKED
+=====================================================
+
+Chunk-major-number = milestone number (Chunk 3.x belongs to M3, etc.).
+~77 chunks total. Each has the 12 fields requested, compressed to one line
+where the content is genuinely simple.
+
+-----------------------------------------------------
+M0 — FOUNDATION
+-----------------------------------------------------
+
+0.1 — Repository & Git Initialization
+  Objective: Create the repo skeleton and initialize version control.
+  Why: Nothing downstream (esp. reproducibility's git_commit_hash) works
+       without this existing first.
+  Deps: none
+  Files: pyproject.toml, .gitignore, README.md, src/dssc_discovery/__init__.py
+  Tasks: git init; create src-layout skeleton per Section F; .gitignore for
+       data/raw, mlruns/, .env, *.db; minimal README stating project purpose
+       + "planning-approved architecture in docs/architecture.md".
+  Tests: pip install -e . succeeds; python -c "import dssc_discovery" succeeds.
+  DoD: first commit exists; package importable.
+  Research relevance: infrastructure only — enables all papers.
+  Enables: everything.
+  Commit: chore: initialize repository and package skeleton
+
+0.2 — Dependency & Environment Setup
+  Objective: Pin the scientific stack.
+  Why: Reproducibility requires a locked environment, not "whatever's installed."
+  Deps: 0.1
+  Files: pyproject.toml (deps), requirements-lock.txt or equivalent
+  Tasks: add pandas/numpy/scipy/scikit-learn/xgboost/shap/gpytorch/botorch/
+       mlflow/sqlalchemy/alembic/pydantic/pytest/streamlit; pin major versions.
+  Tests: fresh venv install succeeds; pytest --collect-only runs (even with
+       zero tests) without import errors.
+  DoD: pip install -e ".[dev]" reproducible on a clean venv.
+  Research relevance: infra.
+  Enables: everything.
+  Commit: chore: pin scientific dependency stack
+
+0.3 — Configuration System
+  Objective: Central, environment-var-overridable config (DB path, MLflow
+       URI, random seed default, data dirs).
+  Why: No hardcoded paths/secrets; single source of truth for the default
+       seed used across ML/BO.
+  Deps: 0.2
+  Files: config/default.yaml, src/dssc_discovery/config.py, .env.example
+  Tasks: pydantic-settings model reading YAML + env override; expose
+       get_config().
+  Tests: default config loads; env var override works; missing required var
+       raises clearly.
+  DoD: any module can `from dssc_discovery.config import get_config`.
+  Research relevance: infra.
+  Enables: 0.4+, all DB/ML/BO chunks.
+  Commit: feat: add configuration system
+
+0.4 — Logging Setup
+  Objective: Structured logging to console + file.
+  Why: Failures must be explicit and traceable (spec section 16), not silent.
+  Deps: 0.3
+  Files: src/dssc_discovery/logging_setup.py
+  Tasks: get_logger(name) helper; config-driven log level/path.
+  Tests: logger writes to configured file; level filtering works.
+  DoD: any module can log consistently.
+  Research relevance: infra.
+  Enables: error-handling in later chunks.
+  Commit: feat: add structured logging
+
+0.5 — Units Registry
+  Objective: Canonical-unit documentation + conversion helpers using Pint at
+       the ingestion boundary only.
+  Why: Prevents unit-mismatch corruption before it ever reaches the DB
+       (spec section 11).
+  Deps: 0.3
+  Files: src/dssc_discovery/domain/units_registry.py
+  Tasks: dict of field->canonical unit; to_canonical(value, unit, field)
+       using Pint internally, returns plain float.
+  Tests: known conversions (°C/K, mM/M) round-trip correctly; invalid/
+       incompatible unit raises.
+  DoD: reusable by validation and ingestion layers.
+  Research relevance: enables Section C data-integrity requirement.
+  Enables: 1.x validation, ingestion chunks.
+  Commit: feat: add units registry with Pint-based conversion
+
+0.6 — Domain Enums & Constants
+  Objective: Controlled vocabularies (Species, SolventType,
+       IlluminationProtocol, MeasurementType, ClosedLoopState, etc.).
+  Why: Prevents free-text drift ("Beta Vulgaris" vs "beta_vulgaris") across
+       the whole system.
+  Deps: 0.3
+  Files: src/dssc_discovery/domain/enums.py
+  Tasks: enum.Enum/StrEnum classes for every controlled field identified in
+       Section E.
+  Tests: enum membership checks; serialization round-trips through Pydantic.
+  DoD: importable, covers all section-3 categorical fields.
+  Research relevance: data-integrity backbone.
+  Enables: all domain model chunks.
+  Commit: feat: add domain enums
+
+0.7 — CI / Pre-commit (lint, type check)
+  Objective: Automated pytest + ruff/black + mypy on every change.
+  Why: Development rule 4 requires tests+lint run after every chunk —
+       automate the check, don't rely on remembering.
+  Deps: 0.1, 0.2
+  Files: .pre-commit-config.yaml, CI workflow (if using GitHub Actions) or
+       local Makefile
+  Tasks: configure ruff, black, mypy (lenient initially), pytest.
+  Tests: hooks run clean on the current (near-empty) tree.
+  DoD: pre-commit run --all-files passes.
+  Research relevance: infra.
+  Enables: quality gate for all future chunks.
+  Commit: chore: add lint/type-check/test automation
+
+0.8 — CHANGELOG & ADR Scaffolding
+  Objective: Living dev log + architecture-decision-record folder.
+  Why: Development rule 22, and Section R decisions need a durable home.
+  Deps: 0.1
+  Files: CHANGELOG.md, docs/adr/0001-record-architecture.md
+  Tasks: seed CHANGELOG with "0.1-0.8: foundation"; write ADR-0001 capturing
+       this plan's key decisions (per-species BO, LOCO-CV, Pint-at-boundary,
+       etc.).
+  Tests: none (docs).
+  DoD: files exist, ADR references this conversation's decisions.
+  Research relevance: reproducibility/traceability of decisions, not just data.
+  Enables: ongoing documentation discipline.
+  Commit: docs: add changelog and first architecture decision record
+
+-----------------------------------------------------
+M1 — RESEARCH DATA SYSTEM
+-----------------------------------------------------
+
+1.1 — Domain Models: Plant/Extraction
+  Objective: Pydantic models for Species, PlantSample, PigmentExtractBatch.
+  Why: First slice of the domain layer; establishes the provenance-mixin
+       pattern.
+  Deps: 0.5, 0.6
+  Files: domain/species.py, domain/extraction.py
+  Tasks: define fields per Section E/C (spec section 3); shared
+       ProvenanceMixin (operator, date, notes, is_synthetic, etc.);
+       validators for obviously-bad values (negative yield, pH out of 0-14).
+  Tests: valid construction; invalid pH/yield raises ValidationError.
+  DoD: models importable, validated round-trip to/from dict.
+  Research relevance: Paper 1 foundation.
+  Enables: 1.4 DB models, 1.6 ingestion.
+  Commit: feat(domain): add plant and extraction domain models
+
+1.2 — Domain Models: Device/Condition
+  Objective: ExperimentalCondition, Device, PhotoanodeFabricationBatch,
+       SensitizationRun.
+  Why: The condition/replicate distinction (Section E) must exist before
+       anything else references it.
+  Deps: 1.1
+  Files: domain/device.py, domain/experimental_condition.py
+  Tasks: implement ExperimentalConditionVector per Section G;
+       Device.replicate_number; FK-shaped references (IDs, not embedded
+       objects) to keep domain layer DB-agnostic.
+  Tests: condition vector serializes to the exact fields BO will need later;
+       replicate numbering validated >0.
+  DoD: models cover every section-3 photoanode/sensitization field.
+  Research relevance: Paper 1/4 foundation — this IS the BO parameter vector.
+  Enables: 1.3 measurement models, all of M6.
+  Commit: feat(domain): add experimental condition and device models
+
+1.3 — Domain Models: Measurements
+  Objective: RawSpectrum, DerivedDescriptor, ElectrochemicalMeasurement,
+       PhotovoltaicMeasurement, StabilityMeasurement.
+  Why: Raw-vs-derived traceability (spec section 12) modeled explicitly.
+  Deps: 1.2
+  Files: domain/measurements.py
+  Tasks: DerivedDescriptor.source_spectrum_id + processing_version; PV
+       measurement bounds (PCE>=0, 0<=FF<=1); stability measurement links
+       back to baseline PV measurement.
+  Tests: negative PCE rejected; FF outside [0,1] rejected; derived
+       descriptor without source_spectrum_id rejected.
+  DoD: covers all section-3 chemical/optical/electrochemical/PV/stability
+       fields.
+  Research relevance: Papers 1, 6.
+  Enables: 2.x chemistry pipeline, 1.4 DB mapping.
+  Commit: feat(domain): add measurement and derived-descriptor models
+
+1.4 — SQLAlchemy Schema + Alembic Migrations
+  Objective: Persist the domain model set from 1.1-1.3.
+  Why: Need actual storage before any real or synthetic row can exist.
+  Deps: 1.3
+  Files: database/models.py, database/session.py, alembic/ migration scripts
+  Tasks: SQLAlchemy 2.0 declarative models mirroring domain entities; FKs
+       per Section E table; Alembic initial migration; SQLite dev DB
+       target, engine-agnostic types (no SQLite/Postgres-only column types).
+  Tests: migration applies cleanly to empty SQLite file; all tables/FKs
+       created; rollback works.
+  DoD: `alembic upgrade head` succeeds from scratch.
+  Research relevance: infra for all papers.
+  Enables: 1.5 repositories.
+  Commit: feat(db): add SQLAlchemy schema and initial migration
+
+1.5 — Repository Layer
+  Objective: Convert between domain Pydantic objects and SQLAlchemy rows;
+       CRUD per entity.
+  Why: Keeps ML/BO code from ever importing SQLAlchemy (Section D).
+  Deps: 1.4
+  Files: database/repositories/*.py
+  Tasks: one repository class per aggregate (SpeciesRepo, ConditionRepo,
+       DeviceRepo, MeasurementRepo, ...); get, add, list, exists (for
+       duplicate detection).
+  Tests: round-trip add->get returns identical domain object; duplicate
+       insert detection test.
+  DoD: no test or code outside database/ imports sqlalchemy directly.
+  Research relevance: infra.
+  Enables: 1.6 ingestion, 1.7 validation.
+  Commit: feat(db): add repository layer
+
+1.6 — Validation Rules Engine
+  Objective: Business-rule validation beyond field-level Pydantic checks:
+       duplicate experiment detection, cross-field consistency (e.g. FF vs
+       Voc/Jsc/PCE relationship sanity), missing-value-reason enforcement.
+  Why: Spec section 11 requires explicit, non-silent validation; this is
+       where cross-entity rules live (Pydantic alone can't see across tables).
+  Deps: 1.5
+  Files: validation/rules.py, validation/exceptions.py
+  Tasks: DuplicateConditionError, PhysicallyImplausibleError; rule: PCE ≈
+       Voc x Jsc x FF within tolerance, flag (don't silently correct)
+       mismatches.
+  Tests: known-good record passes; injected duplicate/implausible record
+       raises the right exception type.
+  DoD: ingestion (1.7) cannot bypass these checks.
+  Research relevance: data integrity underpinning every paper.
+  Enables: 1.7 ingestion, 2.x.
+  Commit: feat(validation): add cross-entity validation rules
+
+1.7 — Manual/CSV Ingestion Pipeline
+  Objective: Load hand-recorded lab data (CSV/manual entry) -> domain
+       objects -> validated -> DB.
+  Why: This is the earliest point real lab data can enter the system.
+  Deps: 1.6, 0.5 (units)
+  Files: ingestion/csv_loader.py, ingestion/manual_entry.py
+  Tasks: CSV schema mapping to domain fields with explicit unit columns;
+       failed rows reported with reason, not silently dropped.
+  Tests: valid CSV ingests fully; malformed row (bad unit, missing required
+       field) is rejected with a clear error, doesn't partially commit.
+  DoD: a real (or realistic-looking dummy, clearly marked) CSV of
+       conditions+devices+measurements ingests end-to-end.
+  Research relevance: unblocks real data entry for Papers 1+.
+  Enables: 2.x, 3.x — THIS CHUNK IS THE "EARLIEST POINT THE SOFTWARE
+       ACCEPTS REAL LAB DATA" GATE for manually-computed descriptors.
+  Commit: feat(ingestion): add CSV/manual data ingestion pipeline
+
+1.8 — Database Backup & Audit Log
+  Objective: Automated backup before destructive operations; append-only
+       audit table for record changes.
+  Why: Spec section 17 — prevent accidental loss of experimental records.
+  Deps: 1.5
+  Files: database/backup.py, database/audit.py
+  Tasks: scheduled/pre-migration backup copy of SQLite file (or pg_dump hook
+       if Postgres); audit trigger/log on updates to measurement tables (raw
+       data should really never update, only insert).
+  Tests: backup file created before a destructive test op; audit row
+       written on update.
+  DoD: raw measurement tables provably append-only in tests (update attempt
+       on raw spectrum either blocked or versioned, never overwritten).
+  Research relevance: protects raw-data immutability guarantee (spec
+       section 12).
+  Enables: trust in all downstream analysis.
+  Commit: feat(db): add backup and audit logging
+
+1.9 — Data Integrity Test Suite
+  Objective: Consolidate and expand validation/DB tests into one gating
+       suite for M1.
+  Why: M1's Definition of Done for the whole milestone.
+  Deps: 1.1-1.8
+  Files: tests/unit/test_data_integrity.py
+  Tasks: exhaustive bounds tests (spec section 11 examples), replicate-vs-
+       condition distinction tests, immutability tests.
+  Tests: itself is the test chunk.
+  DoD: full green suite; this is the M1 exit gate.
+  Research relevance: gate for real-data trustworthiness.
+  Enables: M2.
+  Commit: test: add comprehensive data integrity suite (M1 gate)
+
+-----------------------------------------------------
+M2 — CHARACTERIZATION PIPELINE
+-----------------------------------------------------
+
+2.1 — Raw Spectrum Storage
+  Objective: Store/reference raw UV-Vis/FTIR/EIS/JV files without altering
+       them.
+  Why: Spec section 12 — raw data must never be overwritten; large
+       binary/text files referenced, not necessarily inlined in DB.
+  Deps: 1.4
+  Files: chemistry/raw_storage.py
+  Tasks: file-reference pattern (path/hash stored in
+       RawSpectrum.raw_data_reference), checksum verification on read.
+  Tests: stored reference resolves to unmodified file; checksum mismatch
+       raises.
+  DoD: a raw spectrum file can be registered and retrieved losslessly.
+  Research relevance: Paper 1.
+  Enables: 2.2-2.5.
+  Commit: feat(chemistry): add raw spectrum storage with checksum verification
+
+2.2 — UV-Vis Descriptor Derivation
+  Objective: raw UV-Vis -> lambda_max, bandwidth, integrated absorption.
+  Why: Spec section 12 worked example — this is the reference
+       implementation for "derived descriptor traceable to source +
+       processing version."
+  Deps: 2.1
+  Files: chemistry/uvvis.py
+  Tasks: peak-finding for lambda_max; bandwidth via half-max width;
+       integrated absorption via numerical integration (scipy); write
+       processing_version string tied to code.
+  Tests: known synthetic spectrum (Gaussian peak, analytically known
+       lambda_max/bandwidth) recovers correct values within tolerance.
+  DoD: descriptors reproducible given the same raw spectrum + processing
+       version.
+  Research relevance: Paper 1 optical characterization.
+  Enables: 3.x feature engineering.
+  Commit: feat(chemistry): add UV-Vis descriptor derivation
+
+2.3 — FTIR Descriptor Derivation
+  Objective: raw FTIR -> peak positions/intensities.
+  Why: Same pattern as 2.2, different modality.
+  Deps: 2.1
+  Files: chemistry/ftir.py
+  Tasks: peak detection with configurable prominence threshold; store peak
+       list as structured DerivedDescriptor rows (one per peak) or a
+       compact JSON descriptor — decide based on how ML features will
+       consume it (favor structured rows for traceability).
+  Tests: synthetic multi-peak spectrum recovers expected peaks.
+  DoD: same reproducibility bar as 2.2.
+  Research relevance: Paper 1.
+  Enables: 3.x.
+  Commit: feat(chemistry): add FTIR peak derivation
+
+2.4 — EIS Equivalent-Circuit Fitting
+  Objective: raw EIS spectrum -> Rs, Rct, Rrec, electron lifetime via
+       equivalent-circuit fit.
+  Why: Spec section 3 electrochemical descriptors; nontrivial nonlinear
+       fit, needs explicit fit-quality tracking.
+  Deps: 2.1
+  Files: chemistry/eis.py
+  Tasks: circuit model definition (document which equivalent circuit, e.g.
+       Randles-type); nonlinear least-squares fit (scipy); store fit
+       R²/residual as fit-quality metadata; EXPLICIT FAILURE PATH for
+       non-convergent fits (spec section 16 "incomplete EIS fitting") —
+       record as FAILED_MEASUREMENT-eligible, not silently dropped.
+  Tests: synthetic EIS data generated from known circuit parameters
+       recovers those parameters; deliberately bad data triggers the
+       documented failure path, not a crash.
+  DoD: fit quality is always recorded alongside the fitted values.
+  Research relevance: Paper 1.
+  Enables: 3.x.
+  Commit: feat(chemistry): add EIS equivalent-circuit fitting
+
+2.5 — J-V Curve Processing
+  Objective: raw J-V curve -> Voc, Jsc, FF, PCE with illumination-protocol
+       metadata.
+  Why: Core PV descriptors; must cross-check against Section 1.6's
+       PCE≈Voc×Jsc×FF rule.
+  Deps: 2.1, 1.6
+  Files: chemistry/jv.py
+  Tasks: extract Voc (x-intercept), Jsc (y-intercept), FF (max power point
+       ratio), PCE (given illumination power); run 1.6 consistency check
+       automatically.
+  Tests: synthetic ideal-diode J-V curve recovers known Voc/Jsc/FF/PCE.
+  DoD: consistency-checked descriptors flow into PhotovoltaicMeasurement.
+  Research relevance: Paper 1, the core PV outcome.
+  Enables: 3.x, 4.x (the actual ML target).
+  Commit: feat(chemistry): add J-V curve processing
+
+2.6 — Characterization Pipeline Integration Test
+  Objective: End-to-end raw->descriptor test across all four modalities.
+  Why: M2 exit gate.
+  Deps: 2.2-2.5
+  Files: tests/integration/test_characterization_pipeline.py
+  Tasks: synthetic raw files for all 4 modalities -> full derivation ->
+       assert descriptors land correctly in DB with correct provenance
+       chain.
+  Tests: itself.
+  DoD: green suite; M2 exit gate. THIS IS THE POINT FULL
+       RAW-INSTRUMENT-DATA INGESTION IS TRUSTWORTHY FOR REAL DATA.
+  Research relevance: Paper 1 completeness.
+  Enables: M3.
+  Commit: test: add characterization pipeline integration test (M2 gate)
+
+-----------------------------------------------------
+M3 — ML-READY DATASET
+-----------------------------------------------------
+
+3.1 — Feature Registry
+  Objective: Canonical list of candidate features with type
+       (continuous/categorical), source table, and the N/10 budget
+       guardrail from Section H encoded as a constant.
+  Why: Prevents "just throw all 40 columns in" — the discipline has to live
+       in code, not just in this document.
+  Deps: 1.3, 2.6
+  Files: features/registry.py
+  Tasks: FEATURE_BUDGET = {"tree": 8, "linear_or_gp": 14} (documented
+       rationale in docstring one-liner referencing N); feature metadata
+       table.
+  Tests: registry lists match actual DB columns; budget constants
+       importable by evaluation layer.
+  DoD: single source of truth for "what's a candidate feature."
+  Research relevance: Paper 2 methodology rigor.
+  Enables: 3.2, 4.x.
+  Commit: feat(features): add feature registry with sample-size budget
+       guardrail
+
+3.2 — MLDataset Assembly
+  Objective: Build a flat feature/target table joining
+       condition->device->measurements->descriptors, with group_id,
+       replicate_id.
+  Why: The literal input to every model — grouping correctness here is what
+       makes leakage prevention possible downstream.
+  Deps: 3.1
+  Files: features/dataset_builder.py
+  Tasks: query builder producing one row per Device (measurement grain)
+       with experimental_condition_id as group key; handle missing
+       descriptors explicitly (NaN, never 0).
+  Tests: known small fixture DB produces exactly the expected row
+       count/columns; group_id correctly shared across replicates of the
+       same condition; missing value stays NaN, not 0.
+  DoD: reproducible dataset given a DB state.
+  Research relevance: Paper 2 foundation.
+  Enables: 3.3.
+  Commit: feat(features): add ML dataset assembly
+
+3.3 — Dataset Versioning
+  Objective: Freeze/hash dataset snapshots as MLDatasetVersion.
+  Why: Section M reproducibility requirement.
+  Deps: 3.2, 1.4
+  Files: features/versioning.py, database/models.py (MLDatasetVersion table)
+  Tasks: hash of (query definition + row IDs + code version) ->
+       dataset_version_id; store snapshot metadata, not necessarily the
+       full data blob (recomputable from IDs).
+  Tests: identical DB state -> identical hash; changed DB state ->
+       different hash.
+  DoD: any ModelRun can cite an immutable dataset version.
+  Research relevance: Section M.
+  Enables: 4.x.
+  Commit: feat(features): add dataset version snapshotting
+
+3.4 — Preprocessing Pipeline Factory
+  Objective: Unfit sklearn Pipeline builders (impute/scale/encode) per
+       feature type.
+  Why: Section H — must be fit only inside CV folds; factory pattern makes
+       "never fit globally" structurally enforced.
+  Deps: 3.1
+  Files: preprocessing/pipelines.py
+  Tasks: build_preprocessing_pipeline(feature_spec) -> sklearn.Pipeline
+       (unfit); ColumnTransformer for mixed continuous/categorical.
+  Tests: pipeline is unfit at return (raises NotFittedError if used before
+       .fit); fit-on-train/transform-on-test produces no test-statistic
+       leakage (explicit numeric check).
+  DoD: evaluation harness (4.x) is the only fitter.
+  Research relevance: Paper 2 leakage discipline.
+  Enables: 4.x.
+  Commit: feat(preprocessing): add leakage-safe pipeline factory
+
+3.5 — Synthetic Dataset Generator
+  Objective: Generate a fake-but-structurally-valid MLDataset (known
+       ground-truth relationship) for testing ML/BO code before real data
+       volume exists.
+  Why: Development rules 7-9 — synthetic data must be clearly labeled and
+       usable for pipeline testing without contaminating real analysis.
+       Also unblocks M4-M7 development in parallel with real DoE data
+       collection.
+  Deps: 3.2
+  Files: features/synthetic.py
+  Tasks: parametric function of the ExperimentalConditionVector fields ->
+       synthetic PCE + noise; every row tagged is_synthetic=True; explicit
+       SyntheticDatasetError if any downstream code tries to mix
+       synthetic+real rows in one MLDatasetVersion.
+  Tests: generated rows are internally consistent (recoverable ground truth
+       for a canary model check); mixing guard raises.
+  DoD: synthetic dataset usable end-to-end by 4.x-7.x without ever touching
+       real data.
+  Research relevance: enables safe testing of Papers 2/4/5's infrastructure
+       before real N is large enough.
+  Enables: 4.x dev/testing, all of M7.
+  Commit: feat(features): add synthetic dataset generator for pipeline
+       testing
+
+3.6 — M3 Integration Test
+  Objective: End-to-end: DB fixture -> dataset assembly -> versioning ->
+       preprocessing pipeline runs clean.
+  Why: M3 exit gate.
+  Deps: 3.1-3.5
+  Files: tests/integration/test_ml_ready_dataset.py
+  Tasks: as described.
+  Tests: itself.
+  DoD: green suite; M3 exit gate.
+  Research relevance: unblocks Paper 2 work.
+  Enables: M4, M6 (both can now start, in parallel — see Section O).
+  Commit: test: add ML-ready dataset integration test (M3 gate)
+
+-----------------------------------------------------
+M4 — PREDICTIVE ML
+-----------------------------------------------------
+
+4.1 — Baseline Models
+  Objective: Mean predictor + simple domain linear baseline.
+  Why: Section H — every "real" model must beat these, always reported
+       together.
+  Deps: 3.4
+  Files: models/baselines.py
+  Tasks: MeanBaseline, DomainLinearBaseline (lambda_max + dye loading only)
+       as sklearn-compatible estimators.
+  Tests: fit/predict interface conforms to sklearn API; deterministic given
+       seed.
+  DoD: usable inside the evaluation harness (4.4) identically to "real"
+       models.
+  Research relevance: Paper 2 rigor.
+  Enables: 4.4.
+  Commit: feat(models): add baseline predictors
+
+4.2 — Model Wrappers (RF/XGBoost/GBR/Ridge/Lasso)
+  Objective: Consistent sklearn-API wrappers with seeded RNG.
+  Why: Uniform interface for the evaluation harness; seed threading for
+       reproducibility.
+  Deps: 4.1
+  Files: models/tree_models.py, models/linear_models.py
+  Tasks: thin wrappers exposing consistent hyperparameter surface; all
+       accept random_state.
+  Tests: determinism test (same seed -> identical predictions);
+       hyperparameter pass-through test.
+  DoD: all models pluggable into 4.4 harness.
+  Research relevance: Paper 2.
+  Enables: 4.4.
+  Commit: feat(models): add tree and linear model wrappers
+
+4.3 — Gaussian Process Regression Wrapper
+  Objective: GPyTorch-based GPR usable both as a candidate predictive model
+       here and reused as the BO surrogate spine in M6.
+  Why: Section H — GPR is likely the best-suited model at this N, not just
+       a BO component.
+  Deps: 4.1
+  Files: models/gpr.py
+  Tasks: Matern-5/2 kernel single-task GP, standardized I/O,
+       sklearn-compatible .fit()/.predict() (returning mean+std).
+  Tests: fit on synthetic dataset (3.5) recovers known function shape
+       within tolerance; predictive std shrinks near training points, grows
+       far away (sanity check for calibration).
+  DoD: usable in 4.4 harness with uncertainty output.
+  Research relevance: Paper 2, and shared foundation for Paper 4 (BO).
+  Enables: 4.4, 6.2 (BO surrogate reuses this module).
+  Commit: feat(models): add Gaussian Process regression wrapper
+
+4.4 — Grouped/Nested CV Evaluation Harness
+  Objective: Implement validation strategy A (LOCO) from Section H, with
+       nested inner CV for hyperparameter tuning.
+  Why: This is the leakage-prevention core of the whole ML methodology.
+  Deps: 3.4, 4.1-4.3
+  Files: evaluation/cv_harness.py
+  Tasks: outer LOCO grouped by experimental_condition_id; inner k-fold
+       (also grouped) for hyperparameter search via GridSearchCV/Optuna
+       INSIDE the outer training fold only; metrics MAE/RMSE/R² with CIs
+       across repeats.
+  Tests: LEAKAGE CANARY — deliberately ungrouped CV on the same data must
+       score better than grouped CV (proves the grouping is doing something
+       and the ungrouped case is the leakage failure mode being guarded
+       against); repeated-run determinism given seed.
+  DoD: harness runs all M4 models + baselines, reports comparative table
+       with CIs.
+  Research relevance: Paper 2 core deliverable.
+  Enables: 4.5, 4.6.
+  Commit: feat(evaluation): add leakage-safe grouped nested CV harness
+
+4.5 — Forward-Extrapolation & Cross-Species Validation (Strategies B & C)
+  Objective: Time-ordered split (B) and leave-one-species-out (C)
+       evaluation modes.
+  Why: Section H — these answer different scientific questions than A and
+       must be reported separately, never conflated into one "accuracy"
+       number.
+  Deps: 4.4
+  Files: evaluation/temporal_split.py, evaluation/cross_species.py
+  Tasks: split by ExperimentalCondition.design_source/creation order for B;
+       species-grouped rotation for C.
+  Tests: split boundaries correct on fixture data; C rotates through all
+       species exactly once.
+  DoD: both strategies runnable and reported alongside A.
+  Research relevance: Paper 2 (B), Paper 7 (C).
+  Enables: reports (11.x), Paper 7 groundwork.
+  Commit: feat(evaluation): add forward-extrapolation and cross-species
+       validation
+
+4.6 — Residual Analysis & Learning Curves
+  Objective: Residual plots, overfitting checks (train vs CV score gap),
+       learning curves.
+  Why: Spec section 4 explicit requirement — R² alone is banned.
+  Deps: 4.4
+  Files: evaluation/diagnostics.py
+  Tasks: residual-vs-predicted, residual-vs-feature plots (matplotlib,
+       UI-agnostic); learning curve (score vs training-set-size) given the
+       tiny N.
+  Tests: diagnostic functions run without error on synthetic dataset; flag
+       test — injected heteroscedastic residual pattern is detected/plotted
+       correctly.
+  DoD: every ModelRun can generate a standard diagnostic report.
+  Research relevance: Paper 2 rigor.
+  Enables: 11.x reports.
+  Commit: feat(evaluation): add residual analysis and learning curves
+
+4.7 — MLflow Integration & ModelRun Persistence
+  Objective: Every evaluation run logs to MLflow + writes a ModelRun DB row.
+  Why: Section M reproducibility ledger.
+  Deps: 4.4, 3.3
+  Files: models/tracking.py
+  Tasks: log params/metrics/artifacts to MLflow local store; write
+       dataset_version_id, feature_set_version_id, git_commit_hash, seed to
+       ModelRun table, cross-referencing the MLflow run_id.
+  Tests: a run produces both an MLflow entry and a DB row with matching
+       run_id; re-running with the same recorded config reproduces metrics
+       within documented tolerance.
+  DoD: reproducibility question ("what produced this prediction") answerable
+       by a single join query.
+  Research relevance: Section M, all papers' methods sections.
+  Enables: 6.x (BOIteration cites ModelRun), 11.x.
+  Commit: feat(models): integrate MLflow tracking with ModelRun persistence
+
+4.8 — M4 Integration Test & Model Comparison Report
+  Objective: Full harness run across all models+baselines+strategies on the
+       synthetic dataset; produces a comparison table.
+  Why: M4 exit gate; also the template for the eventual real-data report.
+  Deps: 4.1-4.7
+  Files: tests/integration/test_predictive_ml.py
+  Tasks: run full pipeline on synthetic dataset (3.5), assert baselines are
+       beaten by real models on the known ground-truth function, assert
+       leakage canary behaves as expected.
+  Tests: itself.
+  DoD: green suite. THIS IS THE EARLIEST POINT ML RESULTS ARE
+       SCIENTIFICALLY INTERPRETABLE — but only once run against a real
+       dataset of at least the initial DoE size (~40 conditions); on
+       synthetic data it only proves the pipeline works.
+  Research relevance: Paper 2 gate.
+  Enables: M5.
+  Commit: test: add predictive ML integration test with model comparison
+       (M4 gate)
+
+-----------------------------------------------------
+M5 — EXPLAINABLE AI
+-----------------------------------------------------
+
+5.1 — SHAP Wrapper (Tree Models)
+  Objective: TreeExplainer wrapper for RF/XGBoost/GBR producing global +
+       local values.
+  Deps: 4.7
+  Files: explainability/shap_tree.py
+  Tasks: wrap shap.TreeExplainer; attach mandatory interpretation_caveat
+       field to every output object (Section G).
+  Tests: SHAP values sum to prediction minus base value (sanity identity
+       check) on synthetic dataset.
+  DoD: works against any 4.2 tree model.
+  Research relevance: Paper 3.
+  Enables: 5.3.
+  Commit: feat(explainability): add SHAP wrapper for tree models
+
+5.2 — SHAP Wrapper (GP/Linear Models)
+  Objective: Kernel/permutation-based SHAP for GPR and linear models.
+  Deps: 4.7
+  Files: explainability/shap_kernel.py
+  Tasks: shap.KernelExplainer with background sample; same caveat-field
+       contract as 5.1.
+  Tests: same sanity identity check, tolerant of Kernel SHAP's approximation
+       error.
+  DoD: works against 4.3 GPR model.
+  Research relevance: Paper 3.
+  Enables: 5.3.
+  Commit: feat(explainability): add SHAP wrapper for GP/linear models
+
+5.3 — Global/Local Visualization Helpers
+  Objective: Beeswarm/bar (global), waterfall (local), dependence plots.
+  Deps: 5.1, 5.2
+  Files: explainability/plots.py, visualization/shap_plots.py
+  Tasks: matplotlib-based, UI-agnostic (Streamlit just calls these later).
+  Tests: plot functions run without error on synthetic explanations; return
+       figure objects (not just save-to-disk, for testability).
+  DoD: importable and usable from both scripts and eventual UI.
+  Research relevance: Paper 3.
+  Enables: 11.x.
+  Commit: feat(explainability): add SHAP visualization helpers
+
+5.4 — Hypothesis Log
+  Objective: HypothesisLog table + API implementing the
+       observation->mechanism->confound->experiment pipeline (Section I).
+  Deps: 5.3, 1.4
+  Files: explainability/hypothesis_log.py, DB model
+  Tasks: structured record creation/query; explicit status field
+       (open/testing/confirmed/refuted).
+  Tests: a logged hypothesis round-trips through DB; status transitions
+       validated.
+  DoD: a SHAP finding can be turned into a loggable, queryable hypothesis
+       record.
+  Research relevance: Paper 3's core novel contribution (SHAP->lab bridge).
+  Enables: 11.x, actual lab workflow.
+  Commit: feat(explainability): add hypothesis log linking SHAP findings to
+       experiments
+
+5.5 — M5 Integration Test
+  Objective: End-to-end SHAP generation + hypothesis logging on synthetic
+       dataset.
+  Deps: 5.1-5.4
+  Files: tests/integration/test_explainability.py
+  DoD: green suite; M5 exit gate.
+  Research relevance: Paper 3 gate.
+  Enables: M6 (already unblocked in parallel, see Section O) — formally
+       closes the "predictive+explainable" thread.
+  Commit: test: add explainability integration test (M5 gate)
+
+-----------------------------------------------------
+M6 — BAYESIAN OPTIMIZATION
+-----------------------------------------------------
+
+6.1 — Search Space Definition (Per Species)
+  Objective: SearchSpace objects encoding bounds/types/constraints per
+       species (Section J).
+  Deps: 3.6 (can start in parallel with M4/M5, both depend only on M3)
+  Files: optimization/search_space.py
+  Tasks: continuous/discrete/categorical field specs; linear constraint
+       encoding (e.g. solvent-ratio-sums-to-1); infeasible-combination
+       exclusion list.
+  Tests: sampled points always satisfy bounds+constraints; known-infeasible
+       combination correctly excluded.
+  DoD: one validated SearchSpace per species.
+  Research relevance: Paper 4 foundation.
+  Enables: 6.2+.
+  Commit: feat(optimization): add per-species constrained search space
+
+6.2 — GP Surrogate (BoTorch)
+  Objective: MixedSingleTaskGP-based surrogate reusing 4.3's kernel
+       choices.
+  Deps: 6.1, 4.3
+  Files: optimization/surrogate.py
+  Tasks: fit surrogate on an MLDatasetVersion; standardized outputs; mixed
+       continuous/categorical handling.
+  Tests: fits without error on synthetic dataset; predictive std behaves
+       sanely (as in 4.3).
+  DoD: surrogate usable by acquisition function.
+  Research relevance: Paper 4.
+  Enables: 6.3.
+  Commit: feat(optimization): add BoTorch GP surrogate
+
+6.3 — Acquisition Function
+  Objective: qLogNoisyExpectedImprovement implementation + optimizer over
+       the constrained search space.
+  Deps: 6.2
+  Files: optimization/acquisition.py
+  Tasks: acquisition optimization respecting 6.1's constraints
+       (reject/reproject infeasible candidates, don't just clamp).
+  Tests: optimized candidate always satisfies search-space constraints;
+       acquisition value computed correctly against a hand-checked toy
+       case.
+  DoD: produces a single best candidate point given a fitted surrogate.
+  Research relevance: Paper 4.
+  Enables: 6.4.
+  Commit: feat(optimization): add acquisition function and constrained
+       optimizer
+
+6.4 — Initial DoE Generator
+  Objective: Constrained space-filling (Latin Hypercube) initial design
+       generator.
+  Deps: 6.1
+  Files: optimization/initial_design.py
+  Tasks: LHS respecting bounds+constraints, configurable point count (~40).
+  Tests: generated design satisfies all constraints; space-filling property
+       checked (e.g. min pairwise distance above threshold vs naive
+       random).
+  DoD: usable standalone to generate the real initial DoE later.
+  Research relevance: Paper 4 methodology.
+  Enables: real DoE generation (post-approval), 7.x.
+  Commit: feat(optimization): add constrained Latin Hypercube initial
+       design generator
+
+6.5 — Recommendation Object + Rationale Generation
+  Objective: Wrap acquisition output into the BORecommendation contract
+       (Section G), with generated rationale text.
+  Deps: 6.3
+  Files: optimization/recommend.py
+  Tasks: compose predicted mean/std/acquisition value into a
+       human-readable rationale string; write BOIteration + Recommendation
+       DB rows citing the source ModelRun.
+  Tests: rationale text references correct numeric values; DB rows
+       correctly cross-reference ModelRun/BOIteration.
+  DoD: a BORecommendation is fully traceable per Section M.
+  Research relevance: Paper 4, 5.
+  Enables: 6.6, all of M7/M8.
+  Commit: feat(optimization): add recommendation generation with rationale
+
+6.6 — Invalid-Recommendation Rejection
+  Objective: Hard rejection (not clamping) of any candidate violating
+       feasibility, with logged reason.
+  Deps: 6.5
+  Files: optimization/validation.py
+  Tasks: re-validate every recommendation against 6.1's SearchSpace before
+       it's allowed to reach PROPOSED state.
+  Tests: deliberately-infeasible injected candidate is rejected with a
+       clear, logged reason, never silently coerced into bounds.
+  DoD: Recommendation.state cannot become PROPOSED for an infeasible point.
+  Research relevance: spec sections 11, 16 explicit requirement.
+  Enables: safe M8.
+  Commit: feat(optimization): add hard rejection of infeasible
+       recommendations
+
+6.7 — Convergence/Stopping Diagnostics
+  Objective: Compute the three convergence signals from Section J
+       (improvement decay, plateau, budget).
+  Deps: 6.5
+  Files: optimization/convergence.py
+  Tasks: per-cycle diagnostic computation; DOES NOT AUTO-STOP, only reports
+       — stopping is a human decision.
+  Tests: on synthetic dataset with a known optimum, diagnostics correctly
+       show convergence as cycles approach it.
+  DoD: diagnostics available after every BOIteration.
+  Research relevance: Paper 4/5 methodology.
+  Enables: 11.x reporting.
+  Commit: feat(optimization): add convergence diagnostics
+
+6.8 — M6 Integration Test
+  Objective: Full search-space->surrogate->acquisition->recommendation-
+       >rejection-path test on synthetic dataset.
+  Deps: 6.1-6.7
+  Files: tests/integration/test_bayesian_optimization.py
+  DoD: green suite; M6 exit gate.
+  Research relevance: Paper 4 gate.
+  Enables: M7.
+  Commit: test: add Bayesian optimization integration test (M6 gate)
+
+-----------------------------------------------------
+M7 — SIMULATED CLOSED LOOP
+-----------------------------------------------------
+
+7.1 — Synthetic Objective Function
+  Objective: A documented, explicitly-non-physical analytic function over
+       the real search-space dimensionality, standing in for "the lab."
+  Deps: 6.1
+  Files: closed_loop/synthetic_objective.py
+  Tasks: multimodal bounded function (e.g. a modified Hartmann/Branin-
+       family function reshaped to the parameter count); docstring loudly
+       states "NOT PHYSICALLY MEANINGFUL, TEST HARNESS ONLY."
+  Tests: function is deterministic given seed+noise config; known optimum
+       location documented and checkable.
+  DoD: usable as a drop-in replacement for a real lab result.
+  Research relevance: none directly (explicitly non-scientific) — pure
+       infrastructure validation for Paper 5's eventual claim.
+  Enables: 7.2.
+  Commit: feat(closed_loop): add synthetic objective function for pipeline
+       testing
+
+7.2 — State Machine Implementation
+  Objective: Implement the Section K state machine as code (transitions,
+       guards, audit logging).
+  Deps: 6.6, 1.8 (audit log)
+  Files: closed_loop/state_machine.py
+  Tasks: explicit transition functions per Section K diagram, including
+       FAILED_*, REJECTED, SUPERSEDED; every transition writes
+       ClosedLoopStateLog.
+  Tests: illegal transition (e.g. PROPOSED->MEASURED skipping approval)
+       raises; every legal transition logs correctly.
+  DoD: state machine matches Section K exactly, including the
+       human-approval gate being non-bypassable in code.
+  Research relevance: Paper 5 core mechanism.
+  Enables: 7.3.
+  Commit: feat(closed_loop): implement closed-loop state machine
+
+7.3 — Orchestration Loop
+  Objective: Wire recommend -> (simulate approval) -> synthetic-evaluate ->
+       ingest -> retrain -> next recommendation.
+  Deps: 7.1, 7.2, 4.7
+  Files: closed_loop/orchestrator.py
+  Tasks: single function running N full cycles against the synthetic
+       objective; every produced row is_synthetic=True; retraining creates
+       a new ModelRun/BOIteration each cycle.
+  Tests: after N cycles, best-observed synthetic objective value improves
+       monotonically-ish (allowing exploration noise) and diagnostics (6.7)
+       show sane trends.
+  DoD: runnable end-to-end from a single script call.
+  Research relevance: Paper 5 — this IS the closed loop, minus real lab
+       measurement.
+  Enables: 7.4.
+  Commit: feat(closed_loop): add end-to-end orchestration loop
+
+7.4 — Model-Update Verification
+  Objective: Explicit test that retraining after cycle N's result actually
+       changes cycle N+1's recommendation (not a no-op).
+  Why: Section P's rigor point — a single recommend->measure event isn't a
+       "closed loop" claim; the update must be shown to matter.
+  Deps: 7.3
+  Files: tests/closed_loop_sim/test_model_update_effect.py
+  Tasks: compare cycle N+1's recommendation with and without cycle N's new
+       data injected; assert they differ meaningfully.
+  Tests: itself.
+  DoD: demonstrable, not assumed, that the loop closes.
+  Research relevance: Paper 5's central defensibility claim.
+  Enables: 8.x confidence.
+  Commit: test: verify model update materially affects next recommendation
+
+7.5 — M7 Full Simulation Test & Report
+  Objective: Run 3 full synthetic cycles (mirroring planned real cadence),
+       produce a diagnostic report.
+  Deps: 7.1-7.4
+  Files: tests/closed_loop_sim/test_full_simulation.py
+  DoD: green suite; M7 EXIT GATE — EARLIEST POINT THE BO ENGINE IS
+       VALIDATED ENOUGH TO BE TRUSTED WITH REAL DATA, pending M1-M3 also
+       being complete on real data.
+  Research relevance: Paper 5 gate.
+  Enables: M8.
+  Commit: test: add full 3-cycle closed-loop simulation (M7 gate)
+
+-----------------------------------------------------
+M8 — REAL EXPERIMENTAL CLOSED LOOP
+-----------------------------------------------------
+
+8.1 — Real Initial DoE Generation & Approval Workflow
+  Objective: Generate the actual ~40-point initial DoE (6.4) for real
+       species, route through human approval.
+  Deps: 7.5, 6.4, all of M1
+  Files: scripts/generate_initial_doe.py
+  Tasks: produce real (non-synthetic) ExperimentalCondition proposals in
+       PROPOSED state; approval is a manual DB/CLI action, never automatic.
+  Tests: generated proposals satisfy search-space constraints; none
+       pre-approved by default.
+  DoD: a human can review and approve the real initial DoE.
+  Research relevance: Paper 1 experimental programme start.
+  Enables: real lab work; 8.2.
+  Commit: feat(closed_loop): add real initial DoE generation script
+
+8.2 — Real Result Ingestion Workflow
+  Objective: Route real lab measurements (via 1.7 ingestion) into
+       MEASURED->VALIDATED->INGESTED transitions.
+  Deps: 8.1, 7.2, 1.7
+  Files: closed_loop/real_ingestion.py
+  Tasks: link ingested measurements back to their originating
+       Recommendation/ExperimentalCondition; validation (1.6) gates the
+       VALIDATED transition.
+  Tests: ingested real record correctly advances state; failed validation
+       blocks the transition with a clear reason.
+  DoD: a real measurement can legally reach INGESTED.
+  Research relevance: Paper 5.
+  Enables: 8.3.
+  Commit: feat(closed_loop): add real result ingestion workflow
+
+8.3 — Real Model Retraining Trigger
+  Objective: Manual (not automatic) trigger to retrain on updated real data
+       -> MODEL_UPDATED.
+  Why: Development rules — scientific decisions stay human-gated;
+       retraining on real data shouldn't fire unattended.
+  Deps: 8.2, 4.7
+  Files: scripts/retrain_on_real_data.py
+  Tasks: CLI script producing a new real ModelRun; refuses to run if fewer
+       than a minimum N (config constant, default = initial DoE size) real
+       conditions exist.
+  Tests: refuses below threshold with clear message; succeeds above
+       threshold.
+  DoD: reproducible real retraining path.
+  Research relevance: Paper 5.
+  Enables: 8.4.
+  Commit: feat(closed_loop): add gated real-data retraining trigger
+
+8.4 — Real BO Cycle 1 Recommendation
+  Objective: First real (non-synthetic) recommendation batch (~10-15)
+       after the initial DoE is fully ingested.
+  Deps: 8.3, 6.5, 6.6
+  Files: scripts/run_bo_cycle.py (real mode)
+  Tasks: run 6.5/6.6 against the real ModelRun from 8.3; output routed to
+       human approval exactly as 8.1.
+  Tests: output count matches configured cycle size; all pass 6.6
+       feasibility rejection check.
+  DoD: THIS CHUNK IS THE EARLIEST POINT BO MAY SAFELY RECOMMEND REAL LAB
+       EXPERIMENTS — gated on M7 passing and the real initial DoE (>=~40
+       conditions) being fully ingested.
+  Research relevance: Paper 4/5 real deployment.
+  Enables: 8.5.
+  Commit: feat(closed_loop): generate first real BO cycle recommendations
+
+8.5 — Real Cycle Retrospective (Closed-Loop Claim Validation)
+  Objective: After real cycle 2 exists, run 7.4's "model update mattered"
+       check against real data.
+  Why: Section P — the closed-loop claim is only defensible once cycle N's
+       real result demonstrably changed cycle N+1's real recommendation.
+  Deps: 8.4, two completed real cycles
+  Files: closed_loop/real_retrospective.py
+  Tasks: compare what cycle 2's recommendation would have been with vs
+       without cycle 1's real results.
+  Tests: itself is largely an analysis script; add a regression test on the
+       comparison logic using fixture data.
+  DoD: THIS IS THE EARLIEST POINT THE FULL CLOSED-LOOP CLAIM BECOMES
+       EXPERIMENTALLY DEFENSIBLE — documented, quantified difference
+       attributable to the real model update.
+  Research relevance: Paper 5's central result.
+  Enables: 11.x reporting, Paper 5 writeup.
+  Commit: feat(closed_loop): add real closed-loop retrospective validation
+
+8.6 — M8 Documentation & Audit Export
+  Objective: Exportable audit trail (state log + provenance) for the real
+       closed-loop run, suitable for a methods section / supplementary
+       material.
+  Deps: 8.5
+  Files: reports/closed_loop_audit_export.py
+  DoD: green suite + exported artifact; M8 exit gate.
+  Research relevance: Paper 5 supplementary material.
+  Enables: M9 can begin.
+  Commit: feat(reports): add closed-loop audit trail export
+
+-----------------------------------------------------
+M9 — MULTI-OBJECTIVE OPTIMIZATION
+-----------------------------------------------------
+
+9.1 — Stability Data Integration
+  Objective: Wire StabilityMeasurement into the feature/dataset layer as a
+       second objective.
+  Deps: 1.3, 3.2
+  Files: features/dataset_builder.py (extend), stability/retention.py
+  Tasks: retention-% computation; explicit handling of the AGING-TIME LAG
+       (Section Q risk) — a condition may have PCE data long before
+       stability data exists; dataset builder must not silently drop or
+       impute missing stability.
+  Tests: partial-stability dataset (some conditions aged, some not)
+       assembles correctly with explicit missingness, not imputed values.
+  DoD: multi-objective dataset buildable.
+  Research relevance: Paper 6.
+  Enables: 9.2.
+  Commit: feat(stability): integrate stability/retention data into ML
+       dataset
+
+9.2 — Multi-Objective Surrogate (qNEHVI)
+  Objective: Extend 6.2 to a multi-output GP + qNoisyExpectedHypervolume-
+       Improvement.
+  Deps: 9.1, 6.2
+  Files: optimization/multi_objective.py
+  Tasks: handle the reality that only a subset of conditions have both
+       objectives observed (per 9.1); document the two-tier design from
+       Section Q (PCE-only BO continues driving cadence; multi-objective
+       re-ranking runs periodically as stability data lands).
+  Tests: on synthetic dual-objective dataset, Pareto front recovered
+       correctly; partial-observation handling doesn't crash or silently
+       bias.
+  DoD: produces a Pareto-front recommendation set.
+  Research relevance: Paper 6.
+  Enables: 9.3.
+  Commit: feat(optimization): add multi-objective (PCE/stability) surrogate
+       and acquisition
+
+9.3 — Pareto Front Reporting
+  Objective: Visualize/report the PCE-vs-stability tradeoff front, not a
+       collapsed weighted score.
+  Deps: 9.2
+  Files: visualization/pareto_plots.py
+  Tasks: Pareto front plot with dominated points shown greyed, not removed
+       (transparency).
+  Tests: correct dominance classification on a hand-checked fixture set.
+  DoD: reusable by 11.x.
+  Research relevance: Paper 6.
+  Enables: 11.x.
+  Commit: feat(visualization): add Pareto front reporting
+
+9.4 — Multi-Objective Closed-Loop Extension
+  Objective: Extend the M8 state machine/orchestration to route
+       multi-objective recommendations.
+  Deps: 9.2, 8.5
+  Files: closed_loop/orchestrator.py (extend)
+  Tasks: same approval/audit path as single-objective, with
+       Pareto-set-aware recommendation batches.
+  Tests: state machine handles multi-objective Recommendation rows
+       identically to single-objective ones.
+  DoD: real multi-objective cycles runnable.
+  Research relevance: Paper 6.
+  Enables: 9.5.
+  Commit: feat(closed_loop): extend closed loop to multi-objective
+       recommendations
+
+9.5 — M9 Integration Test
+  Objective: Synthetic dual-objective full-cycle test.
+  Deps: 9.1-9.4
+  Files: tests/integration/test_multi_objective.py
+  DoD: green suite; M9 exit gate.
+  Research relevance: Paper 6 gate.
+  Enables: M10 (independent, could also run in parallel).
+  Commit: test: add multi-objective closed-loop integration test (M9 gate)
+
+-----------------------------------------------------
+M10 — CROSS-SPECIES VALIDATION
+-----------------------------------------------------
+
+10.1 — Cross-Species Dataset Assembly
+  Objective: Formalize the "3 train species / 1 held-out" rotation as a
+       first-class dataset-splitting utility (builds on 4.5).
+  Deps: 4.5
+  Files: evaluation/cross_species.py (extend)
+  DoD: reusable rotation utility with results aggregated across all 4
+       rotations.
+  Research relevance: Paper 7.
+  Enables: 10.2.
+  Commit: feat(evaluation): formalize cross-species rotation as reusable
+       utility
+
+10.2 — Species-Invariant Feature Analysis
+  Objective: Identify which descriptors (from 5.x SHAP) remain important
+       across all 4 rotations vs species-specific ones.
+  Deps: 10.1, 5.3
+  Files: evaluation/species_invariance.py
+  DoD: report distinguishing transferable vs species-specific SHAP
+       importance.
+  Research relevance: Paper 7's core question ("transferable chemistry or
+       species-specific pattern?").
+  Enables: 10.3.
+  Commit: feat(evaluation): add species-invariant feature importance
+       analysis
+
+10.3 — Cross-Species BO Feasibility Check (Optional Extension)
+  Objective: Evaluate (not necessarily implement) whether a
+       cross-species-informed prior improves cold-start BO for a new
+       species.
+  Deps: 10.2, 6.2
+  Files: optimization/cross_species_prior.py
+  Tasks: this is genuinely exploratory — implement as an analysis script
+       comparing cold-start vs transfer-informed initial recommendations
+       on synthetic data first.
+  DoD: documented finding (may conclude "not worth pursuing further" —
+       that's a valid outcome).
+  Research relevance: Paper 7 discussion.
+  Enables: 10.4.
+  Commit: feat(optimization): add exploratory cross-species prior analysis
+
+10.4 — M10 Integration Test & Report
+  Objective: Full cross-species rotation report on real data (once >=3
+       species have sufficient real conditions).
+  Deps: 10.1-10.3
+  Files: tests/integration/test_cross_species.py,
+       reports/cross_species_report.py
+  DoD: green suite; M10 exit gate.
+  Research relevance: Paper 7 gate.
+  Enables: M11 reporting content.
+  Commit: test: add cross-species validation integration test (M10 gate)
+
+-----------------------------------------------------
+M11 — RESEARCH DASHBOARD & PUBLICATION OUTPUTS
+-----------------------------------------------------
+
+11.1 — Streamlit Skeleton & Navigation
+  Objective: Multi-page app shell, importing dssc_discovery only (no logic
+       in UI).
+  Deps: everything it displays must already exist and be tested (M1-M10 as
+       applicable per page)
+  Files: ui/streamlit_app/Home.py, ui/streamlit_app/pages/
+  DoD: navigable skeleton, no business logic in ui/.
+  Research relevance: presentation only.
+  Enables: 11.2+.
+  Commit: feat(ui): add Streamlit app skeleton
+
+11.2 — Experiments & Plant/Pigment Library Pages
+  Deps: 11.1, M1
+  Files: ui/streamlit_app/pages/experiments.py, library.py
+  DoD: browse/search real+synthetic-flagged records (synthetic clearly
+       badged in UI).
+  Commit: feat(ui): add experiments and pigment library pages
+
+11.3 — Raw Measurements & Descriptors Pages
+  Deps: 11.1, M2
+  Files: ui/streamlit_app/pages/measurements.py
+  DoD: view raw spectra + derived descriptors with provenance chain
+       visible.
+  Commit: feat(ui): add raw measurements and descriptors pages
+
+11.4 — ML & Evaluation Pages
+  Deps: 11.1, M4
+  Files: ui/streamlit_app/pages/ml_evaluation.py
+  DoD: displays 4.8's comparison table + 4.6 diagnostics, always with
+       baselines shown.
+  Commit: feat(ui): add ML model evaluation page
+
+11.5 — Explainability Page
+  Deps: 11.1, M5
+  Files: ui/streamlit_app/pages/explainability.py
+  DoD: SHAP plots with interpretation_caveat rendered visibly, not buried;
+       hypothesis log browsable.
+  Commit: feat(ui): add explainability page
+
+11.6 — Bayesian Optimization & Closed-Loop Pages
+  Deps: 11.1, M6, M8
+  Files: ui/streamlit_app/pages/bayesian_optimization.py, closed_loop.py
+  DoD: recommendation review/approval UI wraps 7.2's state machine
+       (approval action still requires explicit human click — UI doesn't
+       bypass the gate).
+  Commit: feat(ui): add Bayesian optimization and closed-loop pages
+
+11.7 — Reports & System History Pages
+  Deps: 11.1, all milestones as available
+  Files: ui/streamlit_app/pages/reports.py, history.py
+  DoD: exportable figures/tables for manuscripts; full audit/history
+       browsable.
+  Research relevance: direct manuscript support for all papers.
+  Enables: nothing further — end of roadmap.
+  Commit: feat(ui): add reports and system history pages
+
+=====================================================
+O. DEPENDENCY GRAPH
+=====================================================
+
+M0 (0.1 -> 0.8, mostly linear)
+  |
+  v
+M1 (1.1 -> 1.9, linear; 1.4 gates everything DB-backed)
+  |
+  +--------------> M2 (2.1 -> 2.6, needs M1's schema)
+  |                     |
+  v                     v
+M3 (3.1 -> 3.6, needs M1 + M2 descriptors)
+  |
+  +--------------------------------+
+  v                                v
+M4 (predictive ML)          M6 (Bayesian optimization)
+  |  needs only M3                 |  needs only M3
+  v                                |  (can run in PARALLEL with M4/M5 —
+M5 (XAI, needs M4's ModelRuns)     |   they share only the M3 dataset layer)
+  |                                |
+  +----------------+---------------+
+                   v
+                  M7 (simulated closed loop — needs M6 fully, M4's
+                       tracking infra reused, synthetic data only)
+                   |
+                   v
+                  M8 (real closed loop — needs M7 passed AND real
+                       M1-M3 data >= initial DoE size)
+                   |
+          +--------+--------+
+          v                 v
+         M9                M10
+   (multi-objective,   (cross-species,
+    needs M8 + M1's     needs M4/M5 + >=3
+    stability data)      species' real data)
+          |                 |
+          +--------+--------+
+                   v
+                  M11 (dashboard — each page individually gated on
+                        its corresponding milestone being done)
+
+KEY PARALLELIZATION INSIGHT: M4/M5 (predictive+explainable modeling) and M6
+(BO) are scientifically distinct threads that both only need M3. They do NOT
+need each other — the BO surrogate is trained independently, not reused from
+the SHAP model. If two people (or two Claude Code sessions on separate
+branches) are available, M4-M5 and M6 can proceed simultaneously once M3 is
+done; they only rejoin at M7.
+
+=====================================================
+P. MILESTONES
+=====================================================
+
+#    Name                              Exit gate — DO NOT PROCEED UNTIL:
+-------------------------------------------------------------------------
+M0   Foundation                        repo installable, config/logging/
+                                        units/enums tested, lint+test
+                                        automation green
+M1   Research data system              full data-integrity suite (1.9)
+                                        green; real manual data can be
+                                        ingested and rejects bad input
+                                        explicitly
+M2   Characterization pipeline         2.6 integration test green — all 4
+                                        raw modalities reproduce known
+                                        synthetic ground truth
+M3   ML-ready dataset                  3.6 green; synthetic dataset
+                                        generator (3.5) works and enforces
+                                        synthetic/real separation
+M4   Predictive ML                     4.8 green; leakage canary test
+                                        demonstrably distinguishes grouped
+                                        vs ungrouped CV; baselines beaten
+                                        only where legitimately beaten
+M5   Explainable AI                    5.5 green; every SHAP output
+                                        carries the interpretation caveat
+M6   Bayesian optimization             6.8 green; infeasible
+                                        recommendations demonstrably
+                                        rejected, not clamped
+M7   Simulated closed loop             7.5 green; 7.4 proves model
+                                        updates materially change
+                                        recommendations, on synthetic data
+                                        only
+M8   Real closed loop                  8.6 green; 8.5's real
+                                        retrospective shows a documented,
+                                        quantified model-update effect on
+                                        real data
+M9   Multi-objective                   9.5 green; Pareto front reporting
+                                        never collapses to a single
+                                        weighted score without
+                                        justification
+M10  Cross-species                     10.4 green; all 4 species
+                                        rotations completed on real data
+M11  Dashboard/publication outputs     each page's underlying milestone
+                                        is independently complete — no
+                                        page ships ahead of its backend
+
+Earliest point the software can accept REAL laboratory data: end of 1.7
+(manual/CSV ingestion) for hand-computed scalar descriptors; full
+raw-instrument automation needs M2 complete.
+
+Earliest point ML results are scientifically interpretable: end of M4, and
+only once evaluated against real data reaching at least the initial-DoE
+scale (~40 conditions) — M4 passing on synthetic data proves the pipeline,
+not the science.
+
+Earliest point BO may safely recommend REAL lab experiments: 8.4, gated on
+M7 fully passing (synthetic loop proven) AND the real initial DoE (~40
+conditions, from M1-M3 on real data) being fully ingested.
+
+Earliest point the full closed-loop claim is experimentally defensible: 8.5
+— requires TWO completed real cycles, with a demonstrated, quantified
+effect of cycle 1's data on cycle 2's recommendation. A single
+recommend->measure event is not sufficient to claim "closed loop."
+
+=====================================================
+Q. RISK REGISTER
+=====================================================
+
+Risk                                    | Mitigation
+------------------------------------------------------------------------------
+Small sample size (N≈70-85)              | LOCO-CV with repeated resampling
+                                          | + CIs (not point R²); feature-
+                                          | budget guardrail (3.1); mandatory
+                                          | baselines
+Data leakage (replicate/condition/       | experimental_condition_id
+batch/species)                           | grouping enforced structurally in
+                                          | 3.2/4.4; leakage canary test
+                                          | (4.4)
+Overfitting (esp. RF/XGBoost at this N)  | feature budget, nested CV,
+                                          | learning curves (4.6),
+                                          | GPR/linear favored over deep
+                                          | trees at this scale
+Experimental variability / batch effects | PigmentExtractBatch/
+                                          | PhotoanodeFabricationBatch
+                                          | modeled as first-class entities,
+                                          | usable as CV grouping
+                                          | alternative
+Descriptor collinearity                  | flagged in 4.6 diagnostics;
+                                          | feature selection restricted to
+                                          | within-fold
+Missing data                             | never silently zero-filled
+                                          | (spec section 11, enforced in
+                                          | 3.2); explicit
+                                          | missing_value_reason provenance
+                                          | field
+Species imbalance                        | leave-one-species-out (10.1)
+                                          | reports per-species performance
+                                          | separately, never pooled-only
+GP "scalability"                         | OVERSTATED in the original risk
+                                          | list at this N — GPR is
+                                          | well-suited, arguably the
+                                          | default choice, not a scaling
+                                          | concern; real risk is the
+                                          | opposite (tree ensembles
+                                          | overfitting small N)
+Measurement uncertainty                  | measurement_uncertainty
+                                          | provenance field; kept
+                                          | structurally distinct from
+                                          | model predictive std (Section M)
+BO exploitation vs exploration           | qLogNEI's built-in balance + 6.7
+                                          | convergence diagnostics
+                                          | reported, never auto-decided
+Infeasible recommendations               | hard rejection at 6.6, not
+                                          | clamping
+False interpretation of SHAP as causal   | interpretation_caveat field
+                                          | mandatory on every SHAP output
+                                          | (Section G/I)
+Irreproducible experiments               | full Section M ledger
+                                          | (dataset/feature/model/seed/
+                                          | git-hash per run)
+Aging-time lag blocking multi-objective  | (NOT IN ORIGINAL LIST) two-tier
+cadence                                  | design (Section J/9.2): PCE-only
+                                          | BO drives cadence;
+                                          | stability-aware re-ranking runs
+                                          | periodically as aging data
+                                          | lands, never blocks a cycle
+Joint species+continuous BO search-space | (NOT IN ORIGINAL LIST) avoided
+complexity                               | by design — per-species
+                                          | independent search spaces
+                                          | (Section J); cross-species
+                                          | knowledge stays in the ML/XAI
+                                          | layer
+Conflating Optuna (HPO tool) with the    | explicit role separation in
+scientific BO engine                     | Section J — Optuna inner-loop
+                                          | only, BoTorch/GPyTorch is the
+                                          | closed-loop engine
+
+=====================================================
+R. QUESTIONS / DECISIONS
+=====================================================
+
+MUST DECIDE NOW (affects M0/M1 schema, costly to change later):
+
+1. Database engine: spec says SQLite->Postgres; the working directory is
+   inside C:\xampp\htdocs, which has MySQL/MariaDB readily available.
+   Recommendation: stick with SQLite for dev, target Postgres for the
+   mature system as originally specified — SQLAlchemy makes the actual
+   engine a connection-string change, so this doesn't block anything, but
+   if reusing XAMPP's MySQL to avoid installing Postgres separately is
+   preferred, say so and adjust the target dialect assumptions accordingly
+   (mainly JSON-column and array-type handling differ slightly).
+2. Dependency manager: plain pip + venv + pyproject.toml (simplest, no
+   extra tooling) vs Poetry (stricter lock files). Recommendation: plain
+   pip/venv — matches "don't introduce unnecessary technologies."
+3. Package name: dssc_discovery (used throughout this plan) — flag now if a
+   different name is wanted, since it's threaded through every file path.
+
+CAN DECIDE LATER (low cost to change, or genuinely needs real data first):
+
+- Exact acquisition function variant beyond the qLogNEI default (6.3) —
+  revisit once real GP fits are observed.
+- MLflow local file store vs a tracking server — start local, migrate if
+  collaboration needs arise.
+- Ax as a convenience layer over raw BoTorch — only worth it if 6.1-6.3's
+  raw implementation proves unwieldy.
+- Exact stopping/convergence threshold values (6.7) — needs real cycle data
+  to calibrate sensibly.
+- Multi-objective weighting/threshold policy details (M9) — depends on how
+  stability data actually distributes once collected.
+
+=====================================================
+MASTER BUILD ORDER
+=====================================================
+
+CHUNK 0.1 --> 0.2 --> ... --> 0.8                         [Foundation]
+        |
+        v
+CHUNK 1.1 --> ... --> 1.9                                  [Research data system]
+        |
+        v
+CHUNK 2.1 --> ... --> 2.6                                  [Characterization pipeline]
+        |
+        v
+CHUNK 3.1 --> ... --> 3.6                                  [ML-ready dataset]
+        |
+   +----+----+
+   v         v
+CHUNK 4.1-4.8   CHUNK 6.1-6.8      [Predictive ML  ||  Bayesian optimization — parallelizable]
+   v         v
+CHUNK 5.1-5.5   (rejoins below)     [Explainable AI]
+   +----+----+
+        v
+CHUNK 7.1 --> ... --> 7.5                                  [Simulated closed loop — synthetic only]
+        |
+        v
+CHUNK 8.1 --> ... --> 8.6                                  [REAL closed loop — first real lab-facing BO]
+        |
+   +----+----+
+   v         v
+CHUNK 9.1-9.5   CHUNK 10.1-10.4   [Multi-objective  ||  Cross-species — parallelizable]
+   +----+----+
+        v
+CHUNK 11.1 --> ... --> 11.7                                [Dashboard / publication outputs]
+        |
+        v
+PRODUCTION RESEARCH SYSTEM
+
+-----------------------------------------------------
+This plan has not been implemented. Every deviation from or pushback on the
+original spec (per-species BO instead of joint, LOCO-CV as primary, GP
+scalability being a non-issue at this N, Pint at the boundary only, Optuna
+vs BoTorch role split, the aging-lag problem for multi-objective) is flagged
+in Sections J/Q/R above — none are silent changes, all await explicit
+approval or correction before Chunk 0.1 begins.
