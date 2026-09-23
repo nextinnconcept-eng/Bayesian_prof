@@ -56,6 +56,11 @@ class PreprocessingWrappedRegressor(BaseEstimator, RegressorMixin):
         self.pipeline_ = pipeline.fit(X[self._feature_names()], y)
         return self
 
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X: pd.DataFrame, **predict_params: object) -> np.ndarray:
+        # **predict_params forwards to the final pipeline step's own
+        # predict() (e.g. GPRModel's return_std=True) -- confirmed
+        # empirically that sklearn.pipeline.Pipeline.predict() forwards
+        # keyword params to the last step unchanged when metadata
+        # routing is disabled (this project's default, unset config).
         check_is_fitted(self, "pipeline_")
-        return self.pipeline_.predict(X[self._feature_names()])
+        return self.pipeline_.predict(X[self._feature_names()], **predict_params)
