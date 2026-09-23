@@ -347,3 +347,20 @@ class StabilityMeasurementORM(MeasurementProvenanceMixin, Base):
     ageing_duration_h: Mapped[float] = mapped_column(sa.Float)
     ageing_conditions: Mapped[str] = mapped_column(sa.String(300), default="")
     retention_percent: Mapped[float] = mapped_column(sa.Float)
+
+
+class MLDatasetVersionORM(ProvenanceMixin, Base):
+    """Chunk 3.3: an immutable snapshot record of one build_ml_dataset()
+    call, not the data itself (PLAN.txt's own roadmap: "not necessarily
+    the full data blob, recomputable from IDs").
+    """
+
+    __tablename__ = "ml_dataset_versions"
+
+    dataset_hash: Mapped[str] = mapped_column(sa.String(64), index=True)
+    query_definition: Mapped[str] = mapped_column(sa.String(100))
+    code_version: Mapped[str] = mapped_column(sa.String(64))
+    is_dirty: Mapped[bool] = mapped_column(sa.Boolean)
+    row_ids_json: Mapped[str] = mapped_column(sa.Text)
+    row_count: Mapped[int] = mapped_column(sa.Integer)
+    feature_columns_json: Mapped[str] = mapped_column(sa.Text)

@@ -18,6 +18,7 @@ from dssc_discovery.database.repositories.measurements import (
     RawSpectrumRepository,
     StabilityMeasurementRepository,
 )
+from dssc_discovery.database.repositories.ml_dataset_version import MLDatasetVersionRepository
 from dssc_discovery.database.repositories.species import SpeciesRepository
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "ElectrochemicalMeasurementRepository",
     "PhotovoltaicMeasurementRepository",
     "StabilityMeasurementRepository",
+    "MLDatasetVersionRepository",
 ]

@@ -7,6 +7,7 @@ then the field defaults below.
 
 from __future__ import annotations
 
+import subprocess
 from functools import lru_cache
 from pathlib import Path
 
@@ -70,3 +71,38 @@ def clear_config_cache() -> None:
 def resolve_path(path: Path) -> Path:
     """Resolve a config path against the repository root if it isn't already absolute."""
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _run_git(*args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=5, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def get_git_commit_hash() -> str:
+    """The current commit's full SHA, or "unknown" if git isn't available
+    or this isn't a git checkout (e.g. a packaged deployment) -- used as
+    the "code version" component of reproducibility records (PLAN.txt
+    Section M). Never raises: a missing git binary shouldn't break
+    dataset/model versioning, just make that one field less informative.
+    """
+    return _run_git("rev-parse", "HEAD") or "unknown"
+
+
+def is_git_working_tree_dirty() -> bool:
+    """True if there are uncommitted changes at call time. A commit hash
+    alone doesn't fully capture "what code produced this" if the working
+    tree had uncommitted edits -- this flag makes that gap visible
+    instead of silently implying a clean, fully-reproducible state.
+    Defaults to True (assume dirty/unknown) if git status can't be
+    determined at all, since that's the safer assumption for a
+    reproducibility flag.
+    """
+    status = _run_git("status", "--porcelain")
+    return True if status is None else bool(status)
