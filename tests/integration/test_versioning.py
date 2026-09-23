@@ -21,6 +21,7 @@ from dssc_discovery.database.repositories import (
 )
 from dssc_discovery.domain.enums import IlluminationProtocol, SpeciesCode
 from dssc_discovery.domain.measurements import PhotovoltaicMeasurement
+from dssc_discovery.features.synthetic import SyntheticDatasetError
 from dssc_discovery.features.versioning import compute_dataset_hash, create_dataset_version
 from tests.seed_helpers import (
     seed_device,
@@ -165,7 +166,7 @@ def test_is_synthetic_true_when_every_row_is_synthetic(session):
     assert version.is_synthetic is True
 
 
-def test_is_synthetic_false_when_any_row_is_real(session):
+def test_mixed_synthetic_and_real_rows_raises_synthetic_dataset_error(session):
     _add_measured_device(
         session, SpeciesCode.BETA_VULGARIS, "BV-COND-001", "BV-DEV-001", is_synthetic=True
     )
@@ -174,8 +175,8 @@ def test_is_synthetic_false_when_any_row_is_real(session):
     )
     session.commit()
 
-    version = create_dataset_version(session, operator="J. Doe")
-    assert version.is_synthetic is False
+    with pytest.raises(SyntheticDatasetError):
+        create_dataset_version(session, operator="J. Doe")
 
 
 def test_version_round_trips_through_the_repository(session):

@@ -10,6 +10,12 @@ name, and the code version (git commit) that produced them. The content
 hash is a deterministic function of exactly those three things, so an
 unchanged DB state at an unchanged commit always produces an identical
 hash, and any change to either produces a different one.
+
+A snapshot mixing synthetic (Chunk 3.5) and real rows raises
+SyntheticDatasetError rather than silently reporting is_synthetic=False
+-- a real scientific result must never be silently contaminated by
+fabricated rows just because both happened to be in the database at
+snapshot time.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from dssc_discovery.config import get_git_commit_hash, is_git_working_tree_dirty
 from dssc_discovery.database.repositories import MLDatasetVersionRepository
 from dssc_discovery.features.dataset_builder import build_ml_dataset
 from dssc_discovery.features.ml_dataset_version import MLDatasetVersion
+from dssc_discovery.features.synthetic import SyntheticDatasetError
 
 QUERY_DEFINITION = "build_ml_dataset"
 
@@ -47,8 +54,10 @@ def compute_dataset_hash(row_ids: list[str], query_definition: str, code_version
 def create_dataset_version(session: Session, operator: str) -> MLDatasetVersion:
     """Assemble the current ML dataset and freeze it as an immutable
     MLDatasetVersion. is_synthetic is set True only if every row in the
-    snapshot is synthetic -- a snapshot mixing real and synthetic rows,
-    or containing only real rows, is not flagged synthetic.
+    snapshot is synthetic; a snapshot containing only real rows (or no
+    rows) is not flagged synthetic. Raises SyntheticDatasetError if the
+    snapshot would mix synthetic and real rows -- that combination is
+    never valid, so it isn't given a silent is_synthetic=False fallback.
     """
     dataframe = build_ml_dataset(session)
     row_ids = sorted(str(value) for value in dataframe["device_id"])
@@ -56,7 +65,18 @@ def create_dataset_version(session: Session, operator: str) -> MLDatasetVersion:
     is_dirty = is_git_working_tree_dirty()
     dataset_hash = compute_dataset_hash(row_ids, QUERY_DEFINITION, code_version)
 
-    is_synthetic = bool(dataframe["is_synthetic"].all()) if not dataframe.empty else False
+    if dataframe.empty:
+        is_synthetic = False
+    else:
+        any_synthetic = bool(dataframe["is_synthetic"].any())
+        all_synthetic = bool(dataframe["is_synthetic"].all())
+        if any_synthetic and not all_synthetic:
+            raise SyntheticDatasetError(
+                "dataset snapshot mixes synthetic and real rows -- refusing to "
+                "version a contaminated dataset; separate synthetic and real "
+                "data before calling create_dataset_version"
+            )
+        is_synthetic = all_synthetic
 
     version = MLDatasetVersion(
         dataset_hash=dataset_hash,
