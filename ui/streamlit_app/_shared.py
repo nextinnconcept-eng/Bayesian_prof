@@ -128,6 +128,29 @@ def session() -> Session:
     return st.session_state["db_session"]
 
 
+@st.cache_resource(show_spinner="Preparing the database…")
+def _migrate(database_url: str) -> None:
+    """Bring the database schema up to date (alembic upgrade head) once per
+    database per server process -- a fresh install works without any
+    manual setup step."""
+    from alembic.config import Config
+
+    from alembic import command
+    from dssc_discovery.config import REPO_ROOT
+
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+
+def ensure_database() -> None:
+    from dssc_discovery.config import get_config
+    from dssc_discovery.database.session import resolve_database_url
+
+    _migrate(resolve_database_url(get_config().database_url))
+
+
 def is_logged_in() -> bool:
     return st.session_state.get("user") is not None
 

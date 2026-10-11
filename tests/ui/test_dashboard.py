@@ -119,3 +119,11 @@ def test_approval_click_records_the_signed_in_user(database):
         assert len(approved) == 1
         assert sm.history(session, approved[0].id)[-1].operator == "admin"
     engine.dispose()
+
+
+def test_root_streamlit_app_entry_point_shows_the_login(database):
+    root = Path(__file__).resolve().parents[2] / "streamlit_app.py"
+    app = AppTest.from_file(str(root), default_timeout=120)
+    app.run()
+    assert not app.exception, [e.message for e in app.exception]
+    assert any("DSSC Discovery" in m.value for m in app.markdown)

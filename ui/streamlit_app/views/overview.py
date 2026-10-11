@@ -15,6 +15,7 @@ from _shared import (
     stage_chart,
 )
 
+from dssc_discovery.closed_loop.demo_data import build_demo_database
 from dssc_discovery.features.dataset_builder import build_ml_dataset
 from dssc_discovery.reports.ui_queries import (
     conditions_frame,
@@ -30,6 +31,22 @@ page_header(
 )
 
 conditions = conditions_frame(session())
+if conditions.empty:
+    with st.container(border=True):
+        st.markdown("#### 👋 The database is empty")
+        st.write(
+            "Load a **simulated** demo dataset to explore every page: a 3-cycle closed "
+            "loop on *Beta vulgaris*, stability tests, recommendations awaiting approval "
+            "and a logged hypothesis. All rows are clearly marked as synthetic."
+        )
+        if st.button("Load demo data (about 1–2 minutes)", type="primary"):
+            with st.spinner(
+                "Simulating experiments, training models and running Bayesian optimization…"
+            ):
+                n_devices = build_demo_database(session())
+            st.success(f"Demo data loaded: {n_devices} simulated devices.")
+            st.rerun()
+
 data = build_ml_dataset(session())
 runs = model_runs_frame(session())
 

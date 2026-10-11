@@ -11,9 +11,15 @@ Status: all roadmap milestones (M0-M11) are implemented and tested on
 synthetic data (498 tests). Results become scientifically meaningful only
 with real data (see each milestone's gate in PLAN.txt).
 
-Dashboard: `streamlit run ui/streamlit_app/Home.py` from the repository root
-(needs the `ui` extra). Demo login: **admin / admin** -- hard-coded for this
-school project only, not real security.
+Dashboard:
+
+    pip install -e ".[ui]"
+    streamlit run streamlit_app.py
+
+Demo login: **admin / admin** -- hard-coded for this school project only, not
+real security. The database tables are created automatically on first run; on
+an empty database the dashboard offers a **Load demo data** button (simulated
+data, clearly marked as synthetic).
 Real closed loop: `scripts/generate_initial_doe.py` -> `scripts/closed_loop_cli.py`
 (approve / fabricated / ingest-results) -> `scripts/retrain_on_real_data.py` ->
 `scripts/run_bo_cycle.py`.
