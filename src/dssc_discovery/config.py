@@ -38,6 +38,10 @@ class Config(BaseSettings):
     data_dir: Path = Field(default=Path("data"))
     log_level: str = Field(default="INFO")
     log_dir: Path = Field(default=Path("logs"))
+    # Chunk 8.3: real retraining refuses to run below this many INGESTED
+    # real conditions per species (default = the initial DoE size).
+    min_real_conditions_for_retraining: int = Field(default=40, ge=1)
+    bo_batch_size: int = Field(default=12, ge=1)
 
     @classmethod
     def settings_customise_sources(
