@@ -79,6 +79,7 @@ DATASET_COLUMNS: tuple[str, ...] = (
     "group_id",
     "replicate_id",
     "condition_code",
+    "design_source",  # provenance, not a feature -- strategy B's split key (Chunk 4.5)
     "device_code",
     *feature_names(stage="design"),  # species_code is first among these (Chunk 3.1's ordering)
     *feature_names(stage="characterization"),
@@ -207,6 +208,7 @@ def build_ml_dataset(session: Session) -> pd.DataFrame:
             "group_id": str(condition.id),
             "replicate_id": device.replicate_number,
             "condition_code": condition.condition_code,
+            "design_source": condition.design_source.value,
             "device_code": device.device_code,
             "species_code": condition.species_code.value,
             **_vector_row(condition),
