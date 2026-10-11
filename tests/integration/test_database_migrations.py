@@ -24,6 +24,8 @@ EXPECTED_TABLES = {
     "electrochemical_measurements",
     "photovoltaic_measurements",
     "stability_measurements",
+    "ml_dataset_versions",
+    "model_runs",
 }
 
 

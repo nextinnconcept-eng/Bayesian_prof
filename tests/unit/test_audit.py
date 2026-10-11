@@ -232,3 +232,27 @@ def test_append_only_orm_classes_cover_all_raw_and_measurement_tables():
         "photovoltaic_measurements",
         "stability_measurements",
     }
+
+
+def test_sessions_of_other_libraries_are_not_audited():
+    # The before_flush hook is registered on Session globally; another
+    # library's session on its own database (e.g. MLflow's SQLite
+    # tracking store) must flush untouched, not fail on a missing
+    # audit_log table.
+    import sqlalchemy as sa
+    from sqlalchemy.orm import DeclarativeBase, Session
+
+    class ForeignBase(DeclarativeBase):
+        pass
+
+    class ForeignRow(ForeignBase):
+        __tablename__ = "foreign_rows"
+        id = sa.Column(sa.Integer, primary_key=True)
+
+    engine = sa.create_engine("sqlite://")
+    ForeignBase.metadata.create_all(engine)
+    with Session(engine) as foreign_session:
+        foreign_session.add(ForeignRow(id=1))
+        foreign_session.commit()
+        assert foreign_session.get(ForeignRow, 1) is not None
+    engine.dispose()

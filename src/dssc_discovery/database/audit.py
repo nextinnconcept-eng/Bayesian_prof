@@ -107,16 +107,25 @@ def _add_audit_entry(session: Session, obj: object, operation: str) -> None:
     )
 
 
+def _is_audited(obj: object) -> bool:
+    return isinstance(obj, Base) and not isinstance(obj, AuditLogORM)
+
+
 def _before_flush(session: Session, flush_context: object, instances: object) -> None:
     # Snapshot first: session.new/dirty/deleted must not be mutated while
     # iterating, and adding audit rows below must not re-audit themselves.
-    new_objects = [o for o in session.new if not isinstance(o, AuditLogORM)]
+    # The listener is registered on Session globally, so it also sees
+    # sessions of other libraries in the same process (e.g. MLflow's own
+    # SQLite tracking store, Chunk 4.7) -- only this schema's objects are
+    # audited; anything else is none of our business and its database has
+    # no audit_log table to write to.
+    new_objects = [o for o in session.new if _is_audited(o)]
     dirty_objects = [
         o
         for o in session.dirty
-        if not isinstance(o, AuditLogORM) and session.is_modified(o, include_collections=False)
+        if _is_audited(o) and session.is_modified(o, include_collections=False)
     ]
-    deleted_objects = [o for o in session.deleted if not isinstance(o, AuditLogORM)]
+    deleted_objects = [o for o in session.deleted if _is_audited(o)]
 
     for obj in new_objects:
         _add_audit_entry(session, obj, "insert")

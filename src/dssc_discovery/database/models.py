@@ -364,3 +364,31 @@ class MLDatasetVersionORM(ProvenanceMixin, Base):
     row_ids_json: Mapped[str] = mapped_column(sa.Text)
     row_count: Mapped[int] = mapped_column(sa.Integer)
     feature_columns_json: Mapped[str] = mapped_column(sa.Text)
+
+
+class ModelRunORM(ProvenanceMixin, Base):
+    """Chunk 4.7: one model's evaluation within one harness run (Chunks
+    4.4/4.5), cross-referencing its MLflow run (PLAN.txt Section M). The
+    question "what produced this number" is answered by joining
+    model_runs -> ml_dataset_versions.
+    """
+
+    __tablename__ = "model_runs"
+
+    dataset_version_id: Mapped[uuid_module.UUID] = mapped_column(
+        GUID(), ForeignKey("ml_dataset_versions.id"), index=True
+    )
+    feature_set_version_id: Mapped[str] = mapped_column(sa.String(64), index=True)
+    feature_names_json: Mapped[str] = mapped_column(sa.Text)
+    model_name: Mapped[str] = mapped_column(sa.String(100))
+    model_family: Mapped[str] = mapped_column(sa.String(50))
+    model_class: Mapped[str] = mapped_column(sa.String(200))
+    strategy: Mapped[str] = mapped_column(sa.String(50))
+    git_commit_hash: Mapped[str] = mapped_column(sa.String(64))
+    is_dirty: Mapped[bool] = mapped_column(sa.Boolean)
+    random_seed: Mapped[int] = mapped_column(sa.Integer)
+    hyperparameters_json: Mapped[str] = mapped_column(sa.Text)
+    cv_config_json: Mapped[str] = mapped_column(sa.Text)
+    metrics_json: Mapped[str] = mapped_column(sa.Text)
+    mlflow_run_id: Mapped[str] = mapped_column(sa.String(64), unique=True)
+    mlflow_experiment_name: Mapped[str] = mapped_column(sa.String(200))
