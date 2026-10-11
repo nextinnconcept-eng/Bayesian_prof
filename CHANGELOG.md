@@ -5,6 +5,40 @@ Loosely follows [Keep a Changelog](https://keepachangelog.com/); for exact
 diffs and dates, `git log` is authoritative -- this file is for *why a
 chunk exists*, not a mechanical commit mirror.
 
+## [Unreleased] - M4 Predictive ML (4.4-4.8)
+
+### Added
+- **4.4** Leakage-safe grouped nested CV harness (`evaluation/cv_harness.py`)
+  -- strategy A: outer LOCO (or shuffled grouped k-fold) by
+  experimental condition, inner grouped GridSearchCV on the outer training
+  fold only, MAE/RMSE/R² with condition-bootstrap CIs across repeats,
+  feature-budget enforcement, measured outcomes (Voc/Jsc/FF) kept out of X.
+  Leakage canary test proves ungrouped CV is optimistic on replicate data.
+- **4.5** Strategy B, forward extrapolation by `design_source` stage
+  (`evaluation/temporal_split.py`), and strategy C, leave-one-species-out
+  (`evaluation/cross_species.py`); `build_ml_dataset()` now carries
+  `design_source` (provenance column, not a feature).
+- **4.6** Out-of-fold residual analysis, heteroscedasticity flag, train-vs-CV
+  overfitting gap and grouped learning curves (`evaluation/diagnostics.py`).
+- **4.7** MLflow tracking + `model_runs` table (`models/tracking.py`, Alembic
+  revision `b3e1f2a4c5d6`): one MLflow run and one ModelRun row per model,
+  citing dataset version, feature-set hash, git commit and seed;
+  `rerun_model_run()` reproduces recorded metrics.
+- **4.8** M4 gate integration test: all models + baselines under A/B/C on
+  synthetic data, side-by-side comparison table. The synthetic generator
+  gained `design_source`, `n_replicates` and a condition-level offset
+  (defaults reproduce previous output exactly).
+
+### Changed
+- Local MLflow store: a plain-path `mlflow_tracking_uri` is now an SQLite
+  store plus `artifacts/` inside that directory -- MLflow 3.x refuses the
+  old filesystem backend by default.
+
+### Fixed
+- Audit `before_flush` hook only audits this schema's ORM objects; it
+  previously intercepted other libraries' sessions (MLflow's tracking DB)
+  and failed on their missing `audit_log` table.
+
 ## [Unreleased] - M0 Foundation
 
 ### Added

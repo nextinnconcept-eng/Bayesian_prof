@@ -32,6 +32,7 @@ realistic-looking conditions.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from datetime import date
 from typing import TypeVar
 
@@ -201,27 +202,48 @@ def _sample_vector(rng: np.random.Generator) -> ExperimentalConditionVector:
     )
 
 
-def generate_synthetic_condition_and_device(
+def generate_synthetic_condition(
     session: Session,
     vector: ExperimentalConditionVector,
     species_code: SpeciesCode,
     condition_code: str,
-    device_code: str,
     operator: str,
     rng: np.random.Generator,
     noise_std_percent: float = _NOISE_STD_PERCENT_DEFAULT,
-) -> Device:
+    design_source: DesignSource = DesignSource.MANUAL,
+    n_replicates: int = 1,
+    condition_effect_std_percent: float = 0.0,
+    device_codes: Sequence[str] | None = None,
+) -> list[Device]:
     """Persist one synthetic ExperimentalCondition + PhotoanodeFabricationBatch
-    + Device + PhotovoltaicMeasurement, all is_synthetic=True, for the
-    given parameter vector. The recorded PCE is synthetic_pce(vector)
-    plus Gaussian noise (std=noise_std_percent); Voc/Jsc/FF are
-    constructed so the row passes check_pce_consistency, which is
-    called explicitly before persisting as an independent check on the
-    construction, not merely assumed correct.
+    and n_replicates replicate Devices (codes device_codes, defaulting to
+    "<condition_code>-R1", "-R2", ...), each with one
+    PhotovoltaicMeasurement, all is_synthetic=True.
+
+    Each replicate's recorded PCE is synthetic_pce(vector) + a
+    condition-level offset shared by every replicate (std
+    condition_effect_std_percent; 0 = none, the default) + its own
+    measurement noise (std noise_std_percent). The shared offset stands in
+    for real batch effects -- same pigment extract, same fabrication day --
+    that no design feature explains; it's what makes replicate leakage
+    across a train/test split measurable (Chunk 4.4's leakage canary).
+    Voc/Jsc/FF are constructed so each row passes check_pce_consistency,
+    which is called explicitly before persisting as an independent check
+    on the construction, not merely assumed correct.
+
+    Random draws happen in a fixed order (offset only when its std > 0,
+    then one noise draw per replicate), so the defaults reproduce exactly
+    the draws of the original single-replicate generator.
 
     Caller must session.commit() -- repositories only flush (Chunk 1.7
     convention), so a batch of these can be committed atomically.
     """
+    if n_replicates < 1:
+        raise ValueError("n_replicates must be >= 1")
+    codes = list(device_codes or [f"{condition_code}-R{r}" for r in range(1, n_replicates + 1)])
+    if len(codes) != n_replicates:
+        raise ValueError("device_codes must have exactly n_replicates entries")
+
     species_repo = SpeciesRepository(session)
     condition_repo = ExperimentalConditionRepository(session)
     photoanode_repo = PhotoanodeFabricationBatchRepository(session)
@@ -234,7 +256,7 @@ def generate_synthetic_condition_and_device(
     condition = ExperimentalCondition(
         species_code=species_code,
         condition_code=condition_code,
-        design_source=DesignSource.MANUAL,
+        design_source=design_source,
         target_parameters=vector,
         operator=operator,
         is_synthetic=True,
@@ -254,42 +276,78 @@ def generate_synthetic_condition_and_device(
         )
     )
 
-    device = device_repo.add(
-        Device(
-            experimental_condition_id=condition.id,
-            photoanode_fabrication_batch_id=photoanode_batch.id,
-            device_code=device_code,
-            replicate_number=1,
-            active_area_cm2=0.25,
-            electrolyte_type=ElectrolyteType.IODIDE_TRIIODIDE,
-            counter_electrode_type=CounterElectrodeType.PLATINUM,
-            operator=operator,
-            is_synthetic=True,
-        )
-    )
-
     true_pce = synthetic_pce(vector)
-    noisy_pce = _clamp(true_pce + float(rng.normal(0.0, noise_std_percent)), *_NOISY_PCE_BOUNDS)
+    offset = (
+        float(rng.normal(0.0, condition_effect_std_percent))
+        if condition_effect_std_percent > 0
+        else 0.0
+    )
     voc = _synthetic_voc_v(vector)
     fill_factor = _synthetic_fill_factor(vector)
-    jsc = _jsc_ma_cm2_for_pce(noisy_pce, voc, fill_factor)
 
-    pv_measurement = PhotovoltaicMeasurement(
-        device_id=device.id,
-        illumination_protocol=IlluminationProtocol.AM1_5G_1_SUN,
-        measurement_date=date.today(),
-        open_circuit_voltage_v=voc,
-        short_circuit_current_density_ma_cm2=jsc,
-        fill_factor=fill_factor,
-        power_conversion_efficiency_percent=noisy_pce,
-        operator=operator,
-        instrument="SYNTHETIC",
-        is_synthetic=True,
-    )
-    check_pce_consistency(pv_measurement)
-    pv_repo.add(pv_measurement)
+    devices = []
+    for replicate, device_code in enumerate(codes, start=1):
+        device = device_repo.add(
+            Device(
+                experimental_condition_id=condition.id,
+                photoanode_fabrication_batch_id=photoanode_batch.id,
+                device_code=device_code,
+                replicate_number=replicate,
+                active_area_cm2=0.25,
+                electrolyte_type=ElectrolyteType.IODIDE_TRIIODIDE,
+                counter_electrode_type=CounterElectrodeType.PLATINUM,
+                operator=operator,
+                is_synthetic=True,
+            )
+        )
 
-    return device
+        noisy_pce = _clamp(
+            true_pce + offset + float(rng.normal(0.0, noise_std_percent)), *_NOISY_PCE_BOUNDS
+        )
+        jsc = _jsc_ma_cm2_for_pce(noisy_pce, voc, fill_factor)
+
+        pv_measurement = PhotovoltaicMeasurement(
+            device_id=device.id,
+            illumination_protocol=IlluminationProtocol.AM1_5G_1_SUN,
+            measurement_date=date.today(),
+            open_circuit_voltage_v=voc,
+            short_circuit_current_density_ma_cm2=jsc,
+            fill_factor=fill_factor,
+            power_conversion_efficiency_percent=noisy_pce,
+            operator=operator,
+            instrument="SYNTHETIC",
+            is_synthetic=True,
+        )
+        check_pce_consistency(pv_measurement)
+        pv_repo.add(pv_measurement)
+        devices.append(device)
+
+    return devices
+
+
+def generate_synthetic_condition_and_device(
+    session: Session,
+    vector: ExperimentalConditionVector,
+    species_code: SpeciesCode,
+    condition_code: str,
+    device_code: str,
+    operator: str,
+    rng: np.random.Generator,
+    noise_std_percent: float = _NOISE_STD_PERCENT_DEFAULT,
+) -> Device:
+    """Single-replicate form of generate_synthetic_condition: one
+    MANUAL condition with one device. Caller must session.commit().
+    """
+    return generate_synthetic_condition(
+        session,
+        vector,
+        species_code,
+        condition_code,
+        operator,
+        rng,
+        noise_std_percent=noise_std_percent,
+        device_codes=[device_code],
+    )[0]
 
 
 def generate_synthetic_dataset(
@@ -300,10 +358,18 @@ def generate_synthetic_dataset(
     operator: str = "synthetic-generator",
     condition_code_prefix: str | None = None,
     noise_std_percent: float = _NOISE_STD_PERCENT_DEFAULT,
+    design_source: DesignSource = DesignSource.MANUAL,
+    n_replicates: int = 1,
+    condition_effect_std_percent: float = 0.0,
 ) -> list[Device]:
-    """Generate and persist n synthetic devices (with conditions,
-    fabrication batches, and PV measurements) for one species, sampling
-    parameter vectors uniformly at random within _SAMPLING_RANGES.
+    """Generate and persist n synthetic conditions for one species
+    (n * n_replicates devices, with fabrication batches and PV
+    measurements), sampling parameter vectors uniformly at random within
+    _SAMPLING_RANGES. design_source tags every condition with one stage
+    of the DoE/BO programme, so strategy B (Chunk 4.5) can be exercised
+    by calling this once per stage with distinct condition_code_prefix
+    values; see generate_synthetic_condition for the replicate/offset
+    model.
 
     Deterministic for a given seed: the same seed always reproduces the
     same dataset (PLAN.txt's reproducibility requirement), even though
@@ -320,17 +386,18 @@ def generate_synthetic_dataset(
     devices = []
     for i in range(n):
         vector = _sample_vector(rng)
-        condition_code = f"{prefix}-{i:04d}"
-        device_code = f"{condition_code}-R1"
-        device = generate_synthetic_condition_and_device(
-            session,
-            vector,
-            species_code,
-            condition_code,
-            device_code,
-            operator,
-            rng,
-            noise_std_percent=noise_std_percent,
+        devices.extend(
+            generate_synthetic_condition(
+                session,
+                vector,
+                species_code,
+                f"{prefix}-{i:04d}",
+                operator,
+                rng,
+                noise_std_percent=noise_std_percent,
+                design_source=design_source,
+                n_replicates=n_replicates,
+                condition_effect_std_percent=condition_effect_std_percent,
+            )
         )
-        devices.append(device)
     return devices
