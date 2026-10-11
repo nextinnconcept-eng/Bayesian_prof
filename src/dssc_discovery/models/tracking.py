@@ -57,6 +57,7 @@ from dssc_discovery.features.ml_dataset_version import MLDatasetVersion
 from dssc_discovery.features.registry import FEATURE_REGISTRY
 from dssc_discovery.models.baselines import DOMAIN_FEATURE_COLUMNS, DomainLinearBaseline
 from dssc_discovery.models.model_run import ModelRun
+from dssc_discovery.optimization.surrogate import Surrogate
 
 DEFAULT_EXPERIMENT_NAME = "dssc-predictive-ml"
 REPRODUCIBILITY_TOLERANCE = 1e-9
@@ -135,6 +136,14 @@ def _tracking_location(tracking_uri: str | None) -> tuple[str, str | None]:
     return f"sqlite:///{(root / 'mlflow.db').as_posix()}", (root / "artifacts").as_uri()
 
 
+def _start_tracking(tracking_uri: str | None, experiment_name: str) -> None:
+    uri, artifact_location = _tracking_location(tracking_uri)
+    mlflow.set_tracking_uri(uri)
+    if artifact_location and mlflow.get_experiment_by_name(experiment_name) is None:
+        mlflow.create_experiment(experiment_name, artifact_location=artifact_location)
+    mlflow.set_experiment(experiment_name)
+
+
 # --- logging -----------------------------------------------------------------
 
 
@@ -167,11 +176,7 @@ def log_cv_result(
             f"{dataset_version.row_count}; was it computed on a different dataset?"
         )
 
-    uri, artifact_location = _tracking_location(tracking_uri)
-    mlflow.set_tracking_uri(uri)
-    if artifact_location and mlflow.get_experiment_by_name(experiment_name) is None:
-        mlflow.create_experiment(experiment_name, artifact_location=artifact_location)
-    mlflow.set_experiment(experiment_name)
+    _start_tracking(tracking_uri, experiment_name)
 
     git_commit = get_git_commit_hash()
     is_dirty = is_git_working_tree_dirty()
@@ -247,6 +252,98 @@ def log_cv_result(
             )
         )
     return runs
+
+
+SURROGATE_EXPERIMENT_NAME = "dssc-bo-surrogate"
+
+
+def log_surrogate_fit(
+    session: Session,
+    surrogate: Surrogate,
+    dataset_version: MLDatasetVersion,
+    operator: str,
+    *,
+    tracking_uri: str | None = None,
+    experiment_name: str = SURROGATE_EXPERIMENT_NAME,
+) -> ModelRun:
+    """One MLflow run + ModelRun row for a BO surrogate fit (strategy
+    "bo_surrogate_fit"), so every BOIteration can cite the exact model
+    that produced its recommendations (Section M). The surrogate is
+    refittable from this row: same dataset version, search space and seed.
+    Caller must session.commit()."""
+    _start_tracking(tracking_uri, experiment_name)
+    space = surrogate.space
+    feature_names = space.param_names
+    feature_set_version_id = compute_feature_set_version_id(feature_names)
+    mean, _ = surrogate.predict_encoded(surrogate.train_X)
+    observed = surrogate.train_Y.squeeze(-1).numpy()
+    metrics = {
+        "train_mae": float(abs(mean - observed).mean()),
+        "best_observed": surrogate.best_observed,
+        "n_train": float(len(observed)),
+    }
+    hyperparameters = {
+        "kernel": type(surrogate.model).__name__,
+        "fitted_hyperparameters": {
+            name: value.detach().numpy().round(6).tolist()
+            for name, value in surrogate.model.named_parameters()
+        },
+    }
+    config = {
+        "strategy": "bo_surrogate_fit",
+        "species": space.species.value,
+        "search_space_version": space.version,
+        "search_space": json.loads(space.to_json()),
+        "target": surrogate.target,
+        "seed": surrogate.seed,
+    }
+    git_commit = get_git_commit_hash()
+    is_dirty = is_git_working_tree_dirty()
+    with mlflow.start_run(run_name=f"surrogate:{space.species.name}") as run:
+        mlflow.set_tags(
+            {
+                "dataset_version_id": str(dataset_version.id),
+                "feature_set_version_id": feature_set_version_id,
+                "git_commit_hash": git_commit,
+                "strategy": "bo_surrogate_fit",
+                "species": space.species.value,
+                "is_synthetic": str(dataset_version.is_synthetic),
+            }
+        )
+        mlflow.log_params({"seed": surrogate.seed, "search_space_version": space.version})
+        mlflow.log_metrics(metrics)
+        mlflow.log_text(_json(hyperparameters), "hyperparameters.json")
+        mlflow.log_text(space.to_json(), "search_space.json")
+        run_id = run.info.run_id
+
+    model_run = ModelRunRepository(session).add(
+        ModelRun(
+            dataset_version_id=dataset_version.id,
+            feature_set_version_id=feature_set_version_id,
+            feature_names_json=_json(feature_names),
+            model_name=(
+                f"bo_surrogate:{space.species.name}"
+                if surrogate.target == "power_conversion_efficiency_percent"
+                else f"bo_surrogate:{space.species.name}:{surrogate.target}"
+            ),
+            model_family="linear_or_gp",
+            model_class=type(surrogate.model).__name__,
+            strategy="bo_surrogate_fit",
+            git_commit_hash=git_commit,
+            is_dirty=is_dirty,
+            random_seed=surrogate.seed,
+            hyperparameters_json=_json(hyperparameters),
+            cv_config_json=_json(config),
+            metrics_json=_json(metrics),
+            mlflow_run_id=run_id,
+            mlflow_experiment_name=experiment_name,
+            operator=operator,
+            is_synthetic=dataset_version.is_synthetic,
+        )
+    )
+    surrogate.model_run_id = model_run.id
+    surrogate.dataset_version_id = dataset_version.id
+    return model_run
 
 
 # --- reproduction ------------------------------------------------------------
