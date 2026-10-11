@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 import altair as alt
 import matplotlib as mpl
 import pandas as pd
+import sqlalchemy as sa
 import streamlit as st
 from sqlalchemy.orm import Session
 
@@ -130,9 +131,8 @@ def session() -> Session:
 
 @st.cache_resource(show_spinner="Preparing the database…")
 def _migrate(database_url: str) -> None:
-    """Bring the database schema up to date (alembic upgrade head) once per
-    database per server process -- a fresh install works without any
-    manual setup step."""
+    """Bring the database schema up to date once per database per server
+    process, so a fresh install works without any manual setup step."""
     from alembic.config import Config
 
     from alembic import command
@@ -141,7 +141,18 @@ def _migrate(database_url: str) -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+
+    engine = sa.create_engine(database_url)
+    try:
+        tables = set(sa.inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+    if tables and "alembic_version" not in tables:
+        # Built directly from the ORM models (tests, demo scripts): the schema
+        # already matches head, so record that instead of re-creating tables.
+        command.stamp(config, "head")
+    else:
+        command.upgrade(config, "head")
 
 
 def ensure_database() -> None:
