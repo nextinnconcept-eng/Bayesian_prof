@@ -5,6 +5,37 @@ Loosely follows [Keep a Changelog](https://keepachangelog.com/); for exact
 diffs and dates, `git log` is authoritative -- this file is for *why a
 chunk exists*, not a mechanical commit mirror.
 
+## [Unreleased] - M5-M11 (implemented, NOT yet tested)
+
+### Added
+- **M5** SHAP wrappers (`explainability/`): TreeExplainer for tree models,
+  Kernel SHAP for GP/linear, every output carrying the mandatory
+  interpretation caveat; matplotlib bar/beeswarm/waterfall/dependence plots;
+  `hypothesis_log` table + API (open -> testing -> confirmed/refuted).
+- **M6** BO (`optimization/`): per-species constrained `SearchSpace`
+  (provisional bounds), MixedSingleTaskGP surrogate, qLogNEI acquisition over
+  the mixed space with hard rejection of infeasible candidates, constrained
+  LHS initial design, recommendations with generated rationale text,
+  convergence diagnostics (report only); `bo_iterations` / `recommendations`
+  tables; surrogate fits logged as ModelRuns.
+- **M7** Closed loop (`closed_loop/`): documented non-physical synthetic
+  objective, Section K state machine with append-only `closed_loop_state_log`
+  and a non-bypassable human-approval gate for real conditions, full
+  simulated-loop orchestrator.
+- **M8** Real workflow: initial-DoE, approval/ingestion CLI, gated
+  retraining and BO-cycle scripts (`scripts/`); validated real ingestion;
+  with/without retrospective comparison; audit-trail export.
+- **M9** Stability retention dataset with explicit missingness, PCE x
+  retention qLogNEHVI, Pareto plots, multi-objective routing through the
+  same approval path.
+- **M10** Species rotation utilities, species-invariance SHAP analysis,
+  exploratory cross-species prior study, cross-species report.
+- **M11** Streamlit dashboard (`ui/streamlit_app/`) over read-only queries
+  (`reports/ui_queries.py`); approval actions go through the state machine.
+- Alembic revision `d7a9c1e3f5b2` (hypothesis_log, bo_iterations,
+  recommendations, closed_loop_state_log). Config gains
+  `min_real_conditions_for_retraining` and `bo_batch_size`.
+
 ## [Unreleased] - M4 Predictive ML (4.4-4.8)
 
 ### Added
