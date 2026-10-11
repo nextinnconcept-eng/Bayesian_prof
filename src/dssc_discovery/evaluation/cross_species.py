@@ -86,3 +86,40 @@ def metrics_by_held_out_species(
         .agg(mae=("mae", "mean"), rmse=("rmse", "mean"), n_rows=("n", "first"))
         .reset_index()
     )
+
+
+def species_rotations(
+    data: pd.DataFrame, species_column: str = SPECIES_COLUMN
+) -> list[tuple[str, pd.DataFrame, pd.DataFrame]]:
+    """Chunk 10.1: the "train on the others / hold one out" rotation as
+    reusable (held-out species, train frame, test frame) triples, one per
+    species -- for any per-rotation analysis beyond CV metrics (e.g.
+    species_invariance.py's SHAP comparison)."""
+    data = data.reset_index(drop=True)
+    return [
+        (
+            species,
+            data.iloc[train_idx].reset_index(drop=True),
+            data.iloc[test_idx].reset_index(drop=True),
+        )
+        for species, (train_idx, test_idx) in leave_one_species_out_splits(data, species_column)
+    ]
+
+
+def rotation_summary(
+    result: CVResult, data: pd.DataFrame, species_column: str = SPECIES_COLUMN
+) -> pd.DataFrame:
+    """Per-model aggregate across all rotations: mean, worst and spread of
+    per-held-out-species MAE -- a model that transfers well has a small
+    spread, not just a good pooled number."""
+    per_species = metrics_by_held_out_species(result, data, species_column)
+    return (
+        per_species.groupby("model")
+        .agg(
+            mean_species_mae=("mae", "mean"),
+            worst_species_mae=("mae", "max"),
+            species_mae_std=("mae", "std"),
+            n_rotations=("species", "nunique"),
+        )
+        .reset_index()
+    )
