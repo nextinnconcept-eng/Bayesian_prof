@@ -18,11 +18,18 @@ def session() -> Session:
     return st.session_state["db_session"]
 
 
+# Provenance bookkeeping: kept, but shown after the scientific columns.
+TRAILING_COLUMNS = ("id", "created_at", "operator", "experiment_version", "notes", "is_synthetic")
+
+
 def badge_synthetic(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty or "is_synthetic" not in frame.columns:
+    if frame.empty:
         return frame
     frame = frame.copy()
-    frame.insert(0, "data", frame["is_synthetic"].map({True: SYNTHETIC_BADGE, False: "real"}))
+    trailing = [c for c in TRAILING_COLUMNS if c in frame.columns]
+    frame = frame[[c for c in frame.columns if c not in trailing] + trailing]
+    if "is_synthetic" in frame.columns:
+        frame.insert(0, "data", frame["is_synthetic"].map({True: SYNTHETIC_BADGE, False: "real"}))
     return frame
 
 

@@ -14,7 +14,14 @@ from dssc_discovery.stability.retention import build_multi_objective_dataset, st
 from dssc_discovery.visualization.pareto_plots import plot_pareto_front
 
 st.title("Bayesian optimization")
-species = st.selectbox("Species", list(SpeciesCode), format_func=lambda s: s.value)
+data = build_ml_dataset(session())
+with_data = set(data["species_code"]) if not data.empty else set()
+ordered = sorted(SpeciesCode, key=lambda s: s.value not in with_data)  # species with data first
+species = st.selectbox(
+    "Species",
+    ordered,
+    format_func=lambda s: s.value + ("" if s.value in with_data else " (no data yet)"),
+)
 
 recommendations = recommendations_frame(session())
 if not recommendations.empty:
@@ -28,8 +35,7 @@ show_table(
     iterations[iterations["species_code"] == species.value] if not iterations.empty else iterations
 )
 
-data = build_ml_dataset(session())
-if not data.empty:
+if species.value in with_data:
     st.subheader("Convergence (reported, never automatic)")
     report = convergence_report(session(), data, species)
     st.info(report.summary)
@@ -47,5 +53,10 @@ if not data.empty:
         f"Stability measured for {coverage['measured']} devices; "
         f"{coverage['not_yet_aged']} not yet aged."
     )
-    if coverage["measured"]:
-        st.pyplot(plot_pareto_front(mo_data[mo_data["species_code"] == species.value]))
+    species_rows = mo_data[mo_data["species_code"] == species.value]
+    if (species_rows["stability_status"] == "measured").any():
+        st.pyplot(plot_pareto_front(species_rows))
+    else:
+        st.info("No stability measurements for this species yet.")
+else:
+    st.info(f"No measured devices for {species.value} yet.")

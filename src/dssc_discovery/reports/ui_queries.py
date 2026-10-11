@@ -97,7 +97,25 @@ def recommendations_frame(session: Session) -> pd.DataFrame:
         record["species_code"] = iteration.species_code.value if iteration else None
         record["objective"] = iteration.objective if iteration else None
         records.append(record)
-    return pd.DataFrame(records)
+    frame = pd.DataFrame(records)
+    if frame.empty:
+        return frame
+    leading = [
+        "condition_code",
+        "state",
+        "species_code",
+        "cycle_number",
+        "objective",
+        "rank",
+        "predicted_objective",
+        "predictive_uncertainty",
+        "predicted_retention",
+        "acquisition_value",
+        "rationale_text",
+    ]
+    return frame[leading + [c for c in frame.columns if c not in leading]].sort_values(
+        ["cycle_number", "rank"]
+    )
 
 
 def bo_iterations_frame(session: Session) -> pd.DataFrame:
