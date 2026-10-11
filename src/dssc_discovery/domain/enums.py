@@ -142,3 +142,12 @@ class ClosedLoopState(StrEnum):
     FAILED_FABRICATION = "failed_fabrication"
     FAILED_MEASUREMENT = "failed_measurement"
     SUPERSEDED = "superseded"
+
+
+class HypothesisStatus(StrEnum):
+    """HypothesisLog lifecycle (PLAN.txt Section I / Chunk 5.4)."""
+
+    OPEN = "open"
+    TESTING = "testing"
+    CONFIRMED = "confirmed"
+    REFUTED = "refuted"

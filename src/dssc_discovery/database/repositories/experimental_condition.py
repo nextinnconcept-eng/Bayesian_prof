@@ -8,9 +8,11 @@ conversion needs to flatten on the way in and reassemble on the way out.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from dssc_discovery.database.models import ExperimentalConditionORM
 from dssc_discovery.database.repositories.base import Repository
+from dssc_discovery.domain.enums import ClosedLoopState
 from dssc_discovery.domain.experimental_condition import (
     ExperimentalCondition,
     ExperimentalConditionVector,
@@ -37,3 +39,13 @@ class ExperimentalConditionRepository(Repository[ExperimentalCondition, Experime
             vector_data
         )
         return ExperimentalCondition.model_validate(condition_data)
+
+    def set_state(self, id: UUID, state: ClosedLoopState) -> ExperimentalCondition:
+        """Low-level state write. Only closed_loop/state_machine.py may call
+        this -- it owns transition legality and the audit log row."""
+        orm_obj = self._session.get(ExperimentalConditionORM, id)
+        if orm_obj is None:
+            raise KeyError(f"no experimental condition {id}")
+        orm_obj.state = state
+        self._session.flush()
+        return self._to_domain(orm_obj)

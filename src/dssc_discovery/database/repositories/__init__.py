@@ -1,4 +1,10 @@
 from dssc_discovery.database.repositories.base import Repository
+from dssc_discovery.database.repositories.closed_loop import (
+    BOIterationRepository,
+    ClosedLoopStateLogRepository,
+    HypothesisLogRepository,
+    RecommendationRepository,
+)
 from dssc_discovery.database.repositories.device import (
     DeviceRepository,
     PhotoanodeFabricationBatchRepository,
@@ -38,4 +44,8 @@ __all__ = [
     "StabilityMeasurementRepository",
     "MLDatasetVersionRepository",
     "ModelRunRepository",
+    "HypothesisLogRepository",
+    "BOIterationRepository",
+    "RecommendationRepository",
+    "ClosedLoopStateLogRepository",
 ]

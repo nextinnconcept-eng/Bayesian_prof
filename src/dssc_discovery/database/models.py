@@ -36,6 +36,7 @@ from dssc_discovery.domain.enums import (
     DesignSource,
     ElectrolyteType,
     EquivalentCircuitModel,
+    HypothesisStatus,
     IlluminationProtocol,
     MeasurementType,
     MissingValueReason,
@@ -392,3 +393,85 @@ class ModelRunORM(ProvenanceMixin, Base):
     metrics_json: Mapped[str] = mapped_column(sa.Text)
     mlflow_run_id: Mapped[str] = mapped_column(sa.String(64), unique=True)
     mlflow_experiment_name: Mapped[str] = mapped_column(sa.String(200))
+
+
+class HypothesisLogORM(ProvenanceMixin, Base):
+    """Chunk 5.4: SHAP finding -> lab hypothesis (PLAN.txt Section I)."""
+
+    __tablename__ = "hypothesis_log"
+
+    observation: Mapped[str] = mapped_column(sa.Text)
+    candidate_mechanism: Mapped[str] = mapped_column(sa.Text)
+    confound_check: Mapped[str] = mapped_column(sa.Text)
+    proposed_confirmatory_experiment: Mapped[str] = mapped_column(sa.Text)
+    status: Mapped[HypothesisStatus] = mapped_column(_str_enum(HypothesisStatus), index=True)
+    status_note: Mapped[str] = mapped_column(sa.Text, default="")
+    shap_features: Mapped[str] = mapped_column(sa.Text, default="")
+    model_run_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        GUID(), ForeignKey("model_runs.id"), nullable=True
+    )
+    interpretation_caveat: Mapped[str] = mapped_column(sa.Text)
+
+
+class BOIterationORM(ProvenanceMixin, Base):
+    """Chunk 6.5: one BO cycle step for one species."""
+
+    __tablename__ = "bo_iterations"
+
+    species_code: Mapped[SpeciesCode] = mapped_column(
+        _str_enum(SpeciesCode), ForeignKey("species.code"), index=True
+    )
+    cycle_number: Mapped[int] = mapped_column(sa.Integer)
+    model_run_id: Mapped[uuid_module.UUID] = mapped_column(
+        GUID(), ForeignKey("model_runs.id"), index=True
+    )
+    dataset_version_id: Mapped[uuid_module.UUID] = mapped_column(
+        GUID(), ForeignKey("ml_dataset_versions.id")
+    )
+    acquisition_function: Mapped[str] = mapped_column(sa.String(100))
+    objective: Mapped[str] = mapped_column(sa.String(50))
+    search_space_json: Mapped[str] = mapped_column(sa.Text)
+    seed: Mapped[int] = mapped_column(sa.Integer)
+    batch_size: Mapped[int] = mapped_column(sa.Integer)
+    best_observed: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    rejected_candidates_json: Mapped[str] = mapped_column(sa.Text, default="[]")
+    convergence_json: Mapped[str] = mapped_column(sa.Text, default="{}")
+
+
+class RecommendationORM(ProvenanceMixin, Base):
+    """Chunk 6.5: Section G's BORecommendation."""
+
+    __tablename__ = "recommendations"
+
+    bo_iteration_id: Mapped[uuid_module.UUID] = mapped_column(
+        GUID(), ForeignKey("bo_iterations.id"), index=True
+    )
+    experimental_condition_id: Mapped[uuid_module.UUID] = mapped_column(
+        GUID(), ForeignKey("experimental_conditions.id"), unique=True
+    )
+    rank: Mapped[int] = mapped_column(sa.Integer)
+    parameters_json: Mapped[str] = mapped_column(sa.Text)
+    predicted_objective: Mapped[float] = mapped_column(sa.Float)
+    predictive_uncertainty: Mapped[float] = mapped_column(sa.Float)
+    acquisition_value: Mapped[float] = mapped_column(sa.Float)
+    predicted_retention: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    predicted_retention_uncertainty: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    rationale_text: Mapped[str] = mapped_column(sa.Text)
+
+
+class ClosedLoopStateLogORM(ProvenanceMixin, Base):
+    """Chunk 7.2: append-only audit trail of Section K transitions."""
+
+    __tablename__ = "closed_loop_state_log"
+
+    experimental_condition_id: Mapped[uuid_module.UUID] = mapped_column(
+        GUID(), ForeignKey("experimental_conditions.id"), index=True
+    )
+    from_state: Mapped[ClosedLoopState | None] = mapped_column(
+        _str_enum(ClosedLoopState), nullable=True
+    )
+    to_state: Mapped[ClosedLoopState] = mapped_column(_str_enum(ClosedLoopState))
+    reason: Mapped[str] = mapped_column(sa.Text, default="")
+    superseding_bo_iteration_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        GUID(), ForeignKey("bo_iterations.id"), nullable=True
+    )

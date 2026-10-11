@@ -33,6 +33,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from dssc_discovery.database.models import (
     GUID,
     Base,
+    ClosedLoopStateLogORM,
     DerivedDescriptorORM,
     ElectrochemicalMeasurementORM,
     PhotovoltaicMeasurementORM,
@@ -63,6 +64,7 @@ class AuditLogORM(Base):
 
 
 _APPEND_ONLY_ORM_CLASSES = (
+    ClosedLoopStateLogORM,
     RawSpectrumORM,
     DerivedDescriptorORM,
     ElectrochemicalMeasurementORM,
