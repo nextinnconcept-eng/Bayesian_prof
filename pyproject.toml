@@ -58,6 +58,10 @@ exclude = [".venv", "alembic/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Dashboard pages are mostly user-facing prose; splitting sentences hurts readability.
+"ui/**" = ["E501"]
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]

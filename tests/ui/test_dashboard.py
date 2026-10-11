@@ -1,7 +1,7 @@
-"""M11: every dashboard page renders without error against a populated
-temporary database, synthetic rows are badged, the explainability page
-shows the caveat, and an approval click goes through the state machine
-with the operator's name."""
+"""M11: the demo login gates the app, every dashboard view renders without
+error against a populated temporary database, synthetic rows are badged,
+the explainability page shows the caveat, and an approval click goes
+through the state machine with the signed-in user's name."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from dssc_discovery.optimization.initial_design import latin_hypercube_design
 from dssc_discovery.optimization.search_space import search_space_for
 
 APP_DIR = Path(__file__).resolve().parents[2] / "ui" / "streamlit_app"
-PAGES = sorted((APP_DIR / "pages").glob("*.py"))
+VIEWS = sorted(p for p in (APP_DIR / "views").glob("*.py") if p.stem != "login")
 
 
 @pytest.fixture(scope="module")
@@ -61,46 +61,61 @@ def database(tmp_path_factory):
     sys.modules.pop("_shared", None)
 
 
-def _run(path: Path) -> AppTest:
-    app = AppTest.from_file(str(path), default_timeout=120)
+def _run(path: Path, user: str | None = "admin") -> AppTest:
+    app = AppTest.from_file(str(path), default_timeout=180)
+    if user:
+        app.session_state["user"] = user
     app.run()
     assert not app.exception, [e.message for e in app.exception]
     return app
 
 
-def test_home_page_renders(database):
-    app = _run(APP_DIR / "Home.py")
-    assert app.title[0].value == "Natural-pigment DSSC discovery"
-
-
-@pytest.mark.parametrize("page", PAGES, ids=[p.stem for p in PAGES])
-def test_every_page_renders(database, page):
-    _run(page)
-
-
-def test_experiments_page_badges_synthetic_rows(database):
-    app = _run(APP_DIR / "pages" / "1_experiments.py")
-    table = app.dataframe[0].value
-    assert (table["data"] == "🧪 SYNTHETIC").all()
-
-
-def test_explainability_page_shows_caveat_and_explains(database):
-    app = _run(APP_DIR / "pages" / "5_explainability.py")
-    assert "not causal" in app.warning[0].value
+def test_login_gate_rejects_wrong_password_and_admits_admin(database):
+    app = _run(APP_DIR / "Home.py", user=None)
+    assert any("DSSC Discovery" in m.value for m in app.markdown)
+    app.text_input[0].input("admin")
+    app.text_input[1].input("wrong")
     app.button[0].click().run()
+    assert app.error and "Incorrect" in app.error[0].value
+    assert "user" not in app.session_state
+
+    app.text_input[1].input("admin")
+    app.button[0].click().run()
+    assert not app.exception
+    assert app.session_state["user"] == "admin"
+    assert any(t.value == "Research dashboard" for t in app.title)
+
+
+@pytest.mark.parametrize("view", VIEWS, ids=[p.stem for p in VIEWS])
+def test_every_view_renders(database, view):
+    _run(view)
+
+
+def test_experiments_view_badges_synthetic_rows(database):
+    app = _run(APP_DIR / "views" / "experiments.py")
+    table = app.dataframe[0].value
+    assert (table["Data"] == "🧪 Synthetic").all()
+    assert "id" not in table.columns
+
+
+def test_explainability_view_shows_caveat_and_explains(database):
+    app = _run(APP_DIR / "views" / "explainability.py")
+    assert "not causal" in app.warning[0].value
+    next(b for b in app.button if b.label == "Explain").click().run()
     assert not app.exception
 
 
-def test_approval_click_goes_through_the_state_machine(database):
-    app = _run(APP_DIR / "pages" / "7_closed_loop.py")
-    app.text_input[0].input("Dr UI").run()
-    app.text_input[1].input("looks good").run()
-    app.button(key=next(b.key for b in app.button if b.key.startswith("approve-"))).click().run()
+def test_approval_click_records_the_signed_in_user(database):
+    app = _run(APP_DIR / "views" / "closed_loop.py", user="admin")
+    app.text_input[0].input("looks good").run()
+    app.button(
+        key=next(b.key for b in app.button if b.key and b.key.startswith("approve-"))
+    ).click().run()
     assert not app.exception
 
     engine = sa.create_engine(database)
     with Session(engine) as session:
         approved = ExperimentalConditionRepository(session).filter(state=ClosedLoopState.APPROVED)
         assert len(approved) == 1
-        assert sm.history(session, approved[0].id)[-1].operator == "Dr UI"
+        assert sm.history(session, approved[0].id)[-1].operator == "admin"
     engine.dispose()

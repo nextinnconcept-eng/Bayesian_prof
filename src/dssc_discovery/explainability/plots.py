@@ -81,7 +81,7 @@ def plot_waterfall(explanation: SHAPExplanationSet, row: int, max_features: int 
     fig, ax = plt.subplots(figsize=(7, 0.4 * len(labels) + 1.8))
     running = explanation.base_value
     for position, (label, value) in enumerate(zip(labels, contributions, strict=True)):
-        ax.barh(position, value, left=running, color="tab:red" if value > 0 else "tab:blue")
+        ax.barh(position, value, left=running, color="#eb6834" if value > 0 else "#2a78d6")
         running += value
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels)

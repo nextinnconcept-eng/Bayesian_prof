@@ -46,14 +46,19 @@ def plot_pareto_front(
     ax.scatter(
         dominated[objectives[0]],
         dominated[objectives[1]],
-        color="lightgrey",
+        color="#c3c2b7",
         s=20,
         label="dominated",
     )
     ax.scatter(
-        front[objectives[0]], front[objectives[1]], color="tab:red", s=30, label="Pareto front"
+        front[objectives[0]],
+        front[objectives[1]],
+        color="#2a78d6",
+        s=40,
+        label="Pareto front",
+        zorder=3,
     )
-    ax.step(front[objectives[0]], front[objectives[1]], where="post", color="tab:red", alpha=0.6)
+    ax.step(front[objectives[0]], front[objectives[1]], where="post", color="#2a78d6", alpha=0.7)
     ax.set_xlabel(labels[0])
     ax.set_ylabel(labels[1])
     ax.set_title(title)
