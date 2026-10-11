@@ -53,8 +53,13 @@ class Surrogate:
         tensor = torch.as_tensor(np.asarray(X, dtype=np.float64), dtype=torch.double)
         with torch.no_grad():
             posterior = self.model.posterior(tensor)
-            mean = posterior.mean.squeeze(-1).numpy()
-            std = posterior.variance.clamp_min(1e-12).sqrt().squeeze(-1).numpy()
+            mean = posterior.mean.squeeze(-1).numpy()  # type: ignore[attr-defined]
+            std = (
+                posterior.variance.clamp_min(1e-12)  # type: ignore[attr-defined]
+                .sqrt()
+                .squeeze(-1)
+                .numpy()
+            )
         return mean, std
 
     def predict(

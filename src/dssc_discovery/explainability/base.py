@@ -14,7 +14,7 @@ plotting against real units.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 import numpy as np
@@ -93,7 +93,7 @@ class SHAPExplanationSet:
         ]
 
 
-def preprocessed(model: object, X: pd.DataFrame) -> tuple[np.ndarray, list[str], object]:
+def preprocessed(model: object, X: pd.DataFrame) -> tuple[np.ndarray, list[str], Any]:
     """(transformed X, output feature names, fitted final estimator) for a
     fitted PreprocessingWrappedRegressor (models/base.py)."""
     pipeline = getattr(model, "pipeline_", None)

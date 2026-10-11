@@ -18,6 +18,7 @@ Works on real data (8.5) and on simulated cycles (7.4) alike.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -68,6 +69,7 @@ def compare_with_and_without(
     batch_size: int = 10,
     seed: int = 0,
     threshold: float = DEFAULT_MATERIAL_THRESHOLD,
+    acquisition_options: Mapping[str, int] | None = None,
 ) -> RetrospectiveResult:
     """data: ML-ready frame including held_out_stage's rows (design_source)."""
     without = data[data["design_source"].astype(str) != held_out_stage]
@@ -76,9 +78,12 @@ def compare_with_and_without(
 
     surrogate_with = fit_surrogate(data, space, seed=seed)
     surrogate_without = fit_surrogate(without, space, seed=seed)
-    batch_with = optimize_acquisition(surrogate_with, batch_size=batch_size, seed=seed).candidates
+    options = dict(acquisition_options or {})
+    batch_with = optimize_acquisition(
+        surrogate_with, batch_size=batch_size, seed=seed, **options
+    ).candidates
     batch_without = optimize_acquisition(
-        surrogate_without, batch_size=batch_size, seed=seed
+        surrogate_without, batch_size=batch_size, seed=seed, **options
     ).candidates
 
     encoded_with = np.vstack([c.encoded for c in batch_with])

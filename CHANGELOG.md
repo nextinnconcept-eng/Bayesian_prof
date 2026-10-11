@@ -5,7 +5,15 @@ Loosely follows [Keep a Changelog](https://keepachangelog.com/); for exact
 diffs and dates, `git log` is authoritative -- this file is for *why a
 chunk exists*, not a mechanical commit mirror.
 
-## [Unreleased] - M5-M11 (implemented, NOT yet tested)
+## [Unreleased] - M5-M11
+
+### Tested
+- Gate/test chunks 5.5, 6.8, 7.4, 7.5, 9.5, 10.4 plus unit tests for the
+  search space, initial design, SHAP wrappers and state machine, and
+  Streamlit AppTest coverage of every dashboard page (incl. an approval
+  click). Fixed mypy errors (including the pre-existing `ureg`
+  annotation) and threaded optimizer-effort options (`acquisition_options`)
+  through the loop so tests and quick runs can trade accuracy for speed.
 
 ### Added
 - **M5** SHAP wrappers (`explainability/`): TreeExplainer for tree models,

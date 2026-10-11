@@ -17,6 +17,7 @@ building.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,7 +27,7 @@ from dssc_discovery.closed_loop.synthetic_objective import SyntheticObjective
 from dssc_discovery.domain.enums import SpeciesCode
 from dssc_discovery.optimization.acquisition import optimize_acquisition
 from dssc_discovery.optimization.initial_design import latin_hypercube_design
-from dssc_discovery.optimization.search_space import search_space_for
+from dssc_discovery.optimization.search_space import SearchSpace, search_space_for
 from dssc_discovery.optimization.surrogate import Surrogate, fit_gp
 
 
@@ -49,7 +50,7 @@ class TransferStudyResult:
         )
 
 
-def _surrogate(space, X: np.ndarray, y: np.ndarray, seed: int) -> Surrogate:  # type: ignore[no-untyped-def]
+def _surrogate(space: SearchSpace, X: np.ndarray, y: np.ndarray, seed: int) -> Surrogate:
     train_X = torch.tensor(X, dtype=torch.double)
     train_Y = torch.tensor(y.reshape(-1, 1), dtype=torch.double)
     return Surrogate(
@@ -70,11 +71,13 @@ def run_transfer_study(
     batch_size: int = 5,
     seeds: int = 5,
     noise_std: float = 0.3,
+    acquisition_options: Mapping[str, int] | None = None,
 ) -> TransferStudyResult:
     space = search_space_for(SpeciesCode.BETA_VULGARIS)
     source = SyntheticObjective(space, noise_std=noise_std)
     target = SyntheticObjective(space, noise_std=noise_std, optimum_shift=target_shift)
-    cold, transfer = [], []
+    cold: list[float] = []
+    transfer: list[float] = []
     for seed in range(seeds):
         rng = np.random.default_rng(seed)
         init = latin_hypercube_design(space, n_init, seed)
@@ -89,7 +92,10 @@ def run_transfer_study(
             ("transfer", (np.vstack([X_init, X_src]), np.concatenate([y_init, y_src]))),
         ):
             batch = optimize_acquisition(
-                _surrogate(space, X, y, seed), batch_size=batch_size, seed=seed
+                _surrogate(space, X, y, seed),
+                batch_size=batch_size,
+                seed=seed,
+                **(acquisition_options or {}),
             ).candidates
             regret = target.optimum_value - max(target.true_value(c.vector) for c in batch)
             (cold if arm == "cold" else transfer).append(regret)

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from dssc_discovery.database.repositories import HypothesisLogRepository
 from dssc_discovery.domain.enums import HypothesisStatus
-from dssc_discovery.explainability.base import SHAPExplanationSet
+from dssc_discovery.explainability.base import INTERPRETATION_CAVEAT, SHAPExplanationSet
 from dssc_discovery.explainability.records import HypothesisRecord
 
 LEGAL_TRANSITIONS: dict[HypothesisStatus, frozenset[HypothesisStatus]] = {
@@ -58,10 +58,8 @@ def log_hypothesis(
         model_run_id=model_run_id or (explanation.model_run_id if explanation else None),
         operator=operator,
         is_synthetic=is_synthetic,
-        **(
-            {"interpretation_caveat": explanation.interpretation_caveat}
-            if explanation is not None
-            else {}
+        interpretation_caveat=(
+            explanation.interpretation_caveat if explanation is not None else INTERPRETATION_CAVEAT
         ),
     )
     return HypothesisLogRepository(session).add(record)

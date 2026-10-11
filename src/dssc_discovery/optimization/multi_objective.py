@@ -90,7 +90,7 @@ def fit_multi_objective(
     return MultiObjectiveSurrogate(
         pce=pce,
         retention=retention,
-        model=ModelListGP(pce.model, retention.model),
+        model=ModelListGP(pce.model, retention.model),  # type: ignore[arg-type]
         ref_point=ref_point,
     )
 

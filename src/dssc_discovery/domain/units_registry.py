@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pint
 
-ureg = pint.UnitRegistry()
+ureg: pint.UnitRegistry = pint.UnitRegistry()
 
 # field name -> canonical unit (Pint-parseable string). Field names match
 # the domain model attributes that will consume them (see PLAN.txt Section

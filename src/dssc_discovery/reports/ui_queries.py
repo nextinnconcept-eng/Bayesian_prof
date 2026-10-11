@@ -7,6 +7,7 @@ Every frame keeps is_synthetic so the UI can badge synthetic rows.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from uuid import UUID
 
 import pandas as pd
@@ -33,7 +34,7 @@ from dssc_discovery.database.repositories import (
 )
 
 
-def _frame(rows: list[BaseModel]) -> pd.DataFrame:
+def _frame(rows: Sequence[BaseModel]) -> pd.DataFrame:
     return pd.DataFrame([r.model_dump(mode="json") for r in rows])
 
 

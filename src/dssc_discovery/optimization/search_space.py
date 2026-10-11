@@ -198,7 +198,7 @@ class SearchSpace:
             else np.empty((0, len(self.params)))
         )
 
-    def decode_values(self, row: Sequence[float]) -> dict[str, object]:
+    def decode_values(self, row: Sequence[float] | np.ndarray) -> dict[str, object]:
         """Encoded row -> raw parameter values (NOT validated)."""
         values: dict[str, object] = {}
         for p, unit in zip(self.params, row, strict=True):
@@ -233,7 +233,9 @@ class SearchSpace:
         if problems:
             return problems
         for constraint in self.linear_constraints:
-            total = sum(c * float(values[n]) for n, c in constraint.coefficients.items())  # type: ignore[arg-type]
+            total = 0.0
+            for n, c in constraint.coefficients.items():
+                total += c * float(values[n])  # type: ignore[arg-type]
             if total > constraint.rhs + 1e-9:
                 problems.append(
                     "linear constraint violated "

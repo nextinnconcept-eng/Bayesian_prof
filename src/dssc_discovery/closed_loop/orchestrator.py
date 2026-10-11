@@ -24,7 +24,7 @@ through the same BOIteration/Recommendation/state-machine code.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -217,10 +217,14 @@ def recommend_cycle(
     seed: int,
     operator: str,
     is_synthetic: bool,
+    acquisition_options: Mapping[str, int] | None = None,
 ) -> RecommendationBatch:
-    """Single-objective (PCE) cycle."""
+    """Single-objective (PCE) cycle. acquisition_options (num_restarts,
+    raw_samples, ...) trade optimizer effort for speed."""
     model_run_id, dataset_version_id = _require_logged(surrogate)
-    result = optimize_acquisition(surrogate, batch_size=batch_size, seed=seed)
+    result = optimize_acquisition(
+        surrogate, batch_size=batch_size, seed=seed, **(acquisition_options or {})
+    )
     return _route_batch(
         session,
         space=surrogate.space,
@@ -247,13 +251,16 @@ def recommend_multi_objective_cycle(
     seed: int,
     operator: str,
     is_synthetic: bool,
+    acquisition_options: Mapping[str, int] | None = None,
 ) -> RecommendationBatch:
     """Multi-objective (PCE x retention) re-ranking cycle (9.4): same
     BOIteration/Recommendation/approval path; the BOIteration cites the
     PCE surrogate's ModelRun, and each Recommendation carries its
     predicted retention."""
     model_run_id, dataset_version_id = _require_logged(surrogate.pce)
-    result = optimize_multi_objective(surrogate, batch_size=batch_size, seed=seed)
+    result = optimize_multi_objective(
+        surrogate, batch_size=batch_size, seed=seed, **(acquisition_options or {})
+    )
     return _route_batch(
         session,
         space=surrogate.space,
@@ -309,6 +316,7 @@ def run_simulated_closed_loop(
     seed: int = 0,
     operator: str = SIMULATION_OPERATOR,
     tracking_uri: str | None = None,
+    acquisition_options: Mapping[str, int] | None = None,
 ) -> SimulationReport:
     """Run the full synthetic loop and return per-cycle diagnostics.
     Commits after every stage so a failure leaves a consistent,
@@ -347,6 +355,7 @@ def run_simulated_closed_loop(
             seed=seed + cycle,
             operator=operator,
             is_synthetic=True,
+            acquisition_options=acquisition_options,
         )
         session.commit()
         _simulate_lab(session, batch.conditions, objective, rng, n_replicates, operator)
