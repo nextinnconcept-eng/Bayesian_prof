@@ -13,7 +13,11 @@ import sqlalchemy as sa
 import streamlit as st
 from sqlalchemy.orm import Session
 
-from dssc_discovery.database.session import get_session_factory
+from dssc_discovery.database.session import (
+    _enable_sqlite_foreign_keys,
+    get_session_factory,
+    resolve_database_url,
+)
 
 # --- demo login --------------------------------------------------------------
 # School-project demo credentials. This is NOT real security: anyone with the
@@ -123,9 +127,45 @@ HIDDEN_COLUMNS = {"id", "experiment_version", "notes", "is_synthetic", "interpre
 # --- session -----------------------------------------------------------------
 
 
+REAL_MODE = "real"
+DEMO_MODE = "demo"
+
+
+def data_mode() -> str:
+    """'real' = the owner's own database; 'demo' = a separate simulated one."""
+    return st.session_state.get("data_mode", REAL_MODE)
+
+
+@st.cache_resource
+def _demo_session_factory(database_url: str):  # type: ignore[no-untyped-def]
+    from sqlalchemy.orm import sessionmaker
+
+    engine = sa.create_engine(database_url)
+    if engine.dialect.name == "sqlite":
+        sa.event.listen(engine, "connect", _enable_sqlite_foreign_keys)
+    return sessionmaker(bind=engine)
+
+
+def _demo_database_url() -> str:
+    from dssc_discovery.config import get_config
+
+    return resolve_database_url(get_config().demo_database_url)
+
+
 def session() -> Session:
+    mode = data_mode()
+    if st.session_state.get("db_session_mode") != mode:
+        old = st.session_state.pop("db_session", None)
+        if old is not None:
+            old.close()
+        st.session_state["db_session_mode"] = mode
     if "db_session" not in st.session_state:
-        st.session_state["db_session"] = get_session_factory()()
+        factory = (
+            _demo_session_factory(_demo_database_url())
+            if mode == DEMO_MODE
+            else get_session_factory()
+        )
+        st.session_state["db_session"] = factory()
     return st.session_state["db_session"]
 
 
@@ -160,6 +200,8 @@ def ensure_database() -> None:
     from dssc_discovery.database.session import resolve_database_url
 
     _migrate(resolve_database_url(get_config().database_url))
+    if data_mode() == DEMO_MODE:
+        _migrate(_demo_database_url())
 
 
 def is_logged_in() -> bool:

@@ -5,9 +5,11 @@ from __future__ import annotations
 import streamlit as st
 from _shared import (
     BLUE,
+    DEMO_MODE,
     STAGE_LABELS,
     STATE_LABELS,
     cards,
+    data_mode,
     empty_state,
     page_header,
     session,
@@ -31,7 +33,15 @@ page_header(
 )
 
 conditions = conditions_frame(session())
-if conditions.empty:
+if conditions.empty and data_mode() != DEMO_MODE:
+    with st.container(border=True):
+        st.markdown("#### 👋 No results saved yet")
+        st.write(
+            "Open **Start here** in the left menu to enter the results you already have "
+            "(typed or uploaded), or to get a first set of experiments to run in the lab. "
+            "To just look around, switch the sidebar to **Demo (simulated)**."
+        )
+elif conditions.empty:
     with st.container(border=True):
         st.markdown("#### 👋 The database is empty")
         st.write(

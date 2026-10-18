@@ -41,7 +41,14 @@ class Config(BaseSettings):
     # Chunk 8.3: real retraining refuses to run below this many INGESTED
     # real conditions per species (default = the initial DoE size).
     min_real_conditions_for_retraining: int = Field(default=40, ge=1)
+    # Below the full threshold but at/above this many INGESTED real
+    # conditions, the dashboard allows a clearly-labelled "early estimate"
+    # (low confidence) instead of refusing to train at all.
+    min_real_conditions_for_early_estimate: int = Field(default=8, ge=1)
     bo_batch_size: int = Field(default=12, ge=1)
+    # Separate database for the simulated demo, so demo rows never mix with
+    # the owner's real data (real retraining refuses synthetic rows).
+    demo_database_url: str = Field(default="sqlite:///data/dssc_demo.db")
 
     @classmethod
     def settings_customise_sources(

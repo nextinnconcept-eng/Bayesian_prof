@@ -11,4 +11,6 @@ data_dir: "data"
 log_level: "INFO"
 log_dir: "logs"
 min_real_conditions_for_retraining: 40
+min_real_conditions_for_early_estimate: 8
+demo_database_url: "sqlite:///data/dssc_demo.db"
 bo_batch_size: 12

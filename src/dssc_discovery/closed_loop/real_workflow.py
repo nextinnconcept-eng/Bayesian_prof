@@ -42,14 +42,32 @@ def real_trained_condition_count(session: Session, species: SpeciesCode) -> int:
 
 
 def retrain_on_real_data(
-    session: Session, species: SpeciesCode, operator: str, *, seed: int | None = None
+    session: Session,
+    species: SpeciesCode,
+    operator: str,
+    *,
+    seed: int | None = None,
+    early: bool = False,
 ) -> Surrogate:
-    minimum = get_config().min_real_conditions_for_retraining
+    """Retrain on real data only. `early=True` lowers the minimum from
+    min_real_conditions_for_retraining to min_real_conditions_for_early_estimate:
+    the result is a low-confidence estimate and callers must label it so."""
+    config = get_config()
+    minimum = (
+        config.min_real_conditions_for_early_estimate
+        if early
+        else config.min_real_conditions_for_retraining
+    )
     count = real_trained_condition_count(session, species)
     if count < minimum:
+        setting = (
+            "min_real_conditions_for_early_estimate"
+            if early
+            else "min_real_conditions_for_retraining"
+        )
         raise InsufficientRealDataError(
             f"{species.value}: {count} real ingested conditions, need >= {minimum} "
-            "(min_real_conditions_for_retraining) before retraining on real data"
+            f"({setting}) before retraining on real data"
         )
     data = build_ml_dataset(session)
     if data["is_synthetic"].any():

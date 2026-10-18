@@ -83,7 +83,7 @@ def test_login_gate_rejects_wrong_password_and_admits_admin(database):
     app.button[0].click().run()
     assert not app.exception
     assert app.session_state["user"] == "admin"
-    assert any(t.value == "Research dashboard" for t in app.title)
+    assert any(t.value == "Start here" for t in app.title)
 
 
 @pytest.mark.parametrize("view", VIEWS, ids=[p.stem for p in VIEWS])

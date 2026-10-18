@@ -7,6 +7,18 @@ chunk exists*, not a mechanical commit mirror.
 
 ## [Unreleased] - M5-M11
 
+### Added (owner-entered data)
+- `user_data/`: plain-language field guide + CSV template and instructions, forgiving
+  row preparation (auto-names, calculated PCE, spelling), a dry-run checker that names
+  what is missing, and `import_past_results()` which saves rows as real data and walks each
+  experiment to INGESTED with the owner recorded as approver (never automated).
+- Readiness levels (none / too few / early / full) from two config thresholds; an
+  **early-estimate** mode (`retrain_on_real_data(early=True)`, default minimum 8) that is
+  always labelled low confidence, a spread-out starting set + lab sheet when there is no
+  data, and a "try my own recipe" predictor.
+- Dashboard pages *Start here* and *Plan my experiments* (now the first pages); a sidebar
+  **My real data / Demo** switch backed by a separate demo database (`demo_database_url`).
+
 ### Tested
 - Gate/test chunks 5.5, 6.8, 7.4, 7.5, 9.5, 10.4 plus unit tests for the
   search space, initial design, SHAP wrappers and state machine, and
