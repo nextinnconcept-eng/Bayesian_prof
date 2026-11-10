@@ -39,6 +39,9 @@ def main() -> None:
             st.Page(VIEWS / "start.py", title="Start here", icon="🚀", default=True),
             st.Page(VIEWS / "plan.py", title="Plan my experiments", icon="🧭"),
         ],
+        "Modelling": [
+            st.Page(VIEWS / "dssc_simulator.py", title="DSSC Simulator", icon="☀️"),
+        ],
         "Overview": [
             st.Page(VIEWS / "overview.py", title="Dashboard", icon="🏠"),
         ],
@@ -46,9 +49,6 @@ def main() -> None:
             st.Page(VIEWS / "experiments.py", title="Experiments", icon="🧪"),
             st.Page(VIEWS / "library.py", title="Plant & pigment library", icon="🌿"),
             st.Page(VIEWS / "measurements.py", title="Measurements", icon="📈"),
-        ],
-        "Modelling": [
-            st.Page(VIEWS / "dssc_simulator.py", title="DSSC Simulator", icon="☀️"),
         ],
         "Machine learning": [
             st.Page(VIEWS / "ml_evaluation.py", title="Model evaluation", icon="🤖"),

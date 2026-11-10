@@ -5,6 +5,7 @@ dssc_discovery.reports.ui_queries."""
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 import altair as alt
 import matplotlib as mpl
@@ -267,6 +268,26 @@ def page_header(title: str, subtitle: str, eyebrow: str = "") -> None:
         st.markdown(f'<div class="eyebrow">{eyebrow}</div>', unsafe_allow_html=True)
     st.title(title)
     st.markdown(f'<p class="page-subtitle">{subtitle}</p>', unsafe_allow_html=True)
+
+
+def simulator_banner() -> None:
+    """A prominent entry to the DSSC Simulator, shown on the front pages."""
+    with st.container(border=True):
+        text, button = st.columns([4, 1], vertical_alignment="center")
+        text.markdown(
+            "#### ☀️ New: DSSC Simulator\n"
+            "Enter UV–Vis absorbance, then calculate **Voc, Jsc, fill factor and efficiency**, "
+            "and see the **I–V and P–V curves** for different light intensities and temperatures."
+        )
+        try:
+            button.page_link(
+                Path(__file__).resolve().parent / "views" / "dssc_simulator.py",
+                label="Open the simulator",
+                icon="☀️",
+                use_container_width=True,
+            )
+        except st.errors.StreamlitAPIException:  # page not registered (e.g. view run alone)
+            button.caption("Open **DSSC Simulator** in the left menu.")
 
 
 def card(title: str, body: str, step: str = "") -> str:

@@ -14,6 +14,7 @@ from _shared import (
     page_header,
     session,
     show_table,
+    simulator_banner,
     stage_chart,
 )
 
@@ -31,6 +32,7 @@ page_header(
     "efficiency found so far, and what is waiting for a researcher's decision.",
     eyebrow="Overview",
 )
+simulator_banner()
 
 conditions = conditions_frame(session())
 if conditions.empty and data_mode() != DEMO_MODE:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import streamlit as st
-from _shared import page_header, session
+from _shared import page_header, session, simulator_banner
 from _user_data_ui import (
     field_hint,
     owner_name,
@@ -29,6 +29,7 @@ page_header(
     "Nothing here assumes any background: every box is explained.",
     eyebrow="Get started",
 )
+simulator_banner()
 require_real_mode()
 
 if flash := st.session_state.pop("flash", None):
