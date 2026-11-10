@@ -47,6 +47,9 @@ def main() -> None:
             st.Page(VIEWS / "library.py", title="Plant & pigment library", icon="🌿"),
             st.Page(VIEWS / "measurements.py", title="Measurements", icon="📈"),
         ],
+        "Modelling": [
+            st.Page(VIEWS / "dssc_simulator.py", title="DSSC Simulator", icon="☀️"),
+        ],
         "Machine learning": [
             st.Page(VIEWS / "ml_evaluation.py", title="Model evaluation", icon="🤖"),
             st.Page(VIEWS / "explainability.py", title="Explainability", icon="🔍"),

@@ -475,3 +475,31 @@ class ClosedLoopStateLogORM(ProvenanceMixin, Base):
     superseding_bo_iteration_id: Mapped[uuid_module.UUID | None] = mapped_column(
         GUID(), ForeignKey("bo_iterations.id"), nullable=True
     )
+
+
+class DSSCSimulationRunORM(ProvenanceMixin, Base):
+    """One saved run of the DSSC Simulator page: the inputs (UV-Vis data,
+    model parameters) and the calculated Voc, Jsc, FF and efficiency.
+
+    The numbers are model output, not lab measurements, so is_synthetic is True.
+    """
+
+    __tablename__ = "dssc_simulation_runs"
+
+    label: Mapped[str] = mapped_column(sa.String(200), default="")
+    model: Mapped[str] = mapped_column(sa.String(30))  # "equations" or "single_diode"
+    temperature_k: Mapped[float] = mapped_column(sa.Float)
+    irradiance_w_m2: Mapped[float] = mapped_column(sa.Float)
+    area_cm2: Mapped[float] = mapped_column(sa.Float)
+    alpha_cm1: Mapped[float] = mapped_column(sa.Float)
+    uvvis_wavelength_nm: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    uvvis_json: Mapped[str] = mapped_column(sa.Text, default="[]")  # [[nm, absorbance], ...]
+    parameters_json: Mapped[str] = mapped_column(sa.Text, default="{}")
+    voc_v: Mapped[float] = mapped_column(sa.Float)
+    jsc_ma_cm2: Mapped[float] = mapped_column(sa.Float)
+    isc_ma: Mapped[float] = mapped_column(sa.Float)
+    fill_factor: Mapped[float] = mapped_column(sa.Float)
+    vmp_v: Mapped[float] = mapped_column(sa.Float)
+    imp_ma_cm2: Mapped[float] = mapped_column(sa.Float)
+    pmax_mw_cm2: Mapped[float] = mapped_column(sa.Float)
+    efficiency_percent: Mapped[float] = mapped_column(sa.Float)
