@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-from _shared import AQUA, BLUE, INK, MUTED, ORANGE, empty_state, page_header, session
+from _shared import AQUA, BLUE, INK, MUTED, ORANGE, cards, empty_state, page_header, session
 
 from dssc_discovery.dssc_model import (
     DSSCParams,
@@ -26,14 +26,27 @@ from dssc_discovery.dssc_runs import runs_frame, save_run
 EQUATIONS = "DSSC equations (Eq. 1–4)"
 SINGLE_DIODE = "Single-diode model"
 SERIES_COLORS = [BLUE, ORANGE, AQUA, "#8a5cd6", "#c9a227", "#d1457f"]
+LIGHT_LEVELS = [100, 200, 320, 500, 640, 800, 1000, 1200]
+TEMPERATURES = [273, 285, 300, 325, 350, 375]
 DEFAULTS = DSSCParams()
 
 page_header(
     "DSSC Simulator",
-    "Enter UV–Vis absorbance, then calculate Voc, Jsc, fill factor and efficiency, and draw "
-    "I–V and P–V curves for different light intensities and temperatures.",
+    "Predict how a dye-sensitized solar cell performs from its UV–Vis absorbance: open-circuit "
+    "voltage, short-circuit current, fill factor and efficiency, with I–V and P–V curves. "
+    "These are calculated (modelled) values, not lab measurements.",
     eyebrow="Modelling",
 )
+cards(
+    [
+        ("Enter UV–Vis", "Type or upload wavelength and absorbance. The app turns it into α."),
+        ("Set conditions", "Choose temperature, light intensity and cell area."),
+        ("Read the results", "Voc, Jsc, fill factor, efficiency and the I–V / P–V curves."),
+        ("Compare and save", "See how light and temperature change the cell, and save a run."),
+    ],
+    numbered=True,
+)
+st.write("")
 
 bad_inputs: list[str] = []
 
@@ -52,45 +65,104 @@ def number(label: str, default: float, key: str, help: str = "") -> float:
     return value
 
 
+# --- operating conditions (shared by tabs 2-4) -----------------------------------------
+
+with st.container(border=True):
+    st.markdown("**Conditions** — used by tabs 2, 3 and 4")
+    ca, cb, cc = st.columns(3)
+    temp = float(
+        ca.slider(
+            "Temperature (K)",
+            273,
+            375,
+            300,
+            key="cond_T",
+            help="The source document covers 273–375 K.",
+        )
+    )
+    irr = float(
+        cb.number_input(
+            "Light intensity Pin (W/m²)",
+            50.0,
+            1500.0,
+            1000.0,
+            step=10.0,
+            key="cond_G",
+            help="1000 W/m² = 100 mW/cm² = one sun.",
+        )
+    )
+    area = float(
+        cc.number_input(
+            "Cell area (cm²)",
+            0.01,
+            100.0,
+            1.0,
+            step=0.1,
+            key="cond_A",
+            help="Only used to turn Jsc (mA/cm²) into Isc (mA).",
+        )
+    )
+
 # --- model parameters (shared by every tab) -------------------------------------------
 
 PARAM_KEYS = ["dssc_k", "dssc_q", "dssc_L", "dssc_d", "dssc_m", "dssc_D", "dssc_n0", "dssc_phi"]
-with st.expander("Model parameters (defaults are the values from the source document)"):
-    c1, c2, c3, c4 = st.columns(4)
+with st.expander(
+    "⚙️ Advanced: model parameters (defaults are the values from the source document)"
+):
+    c1, c2, c3 = st.columns(3)
     with c1:
-        k = number("k, Boltzmann constant (J/K)", DEFAULTS.k, "dssc_k")
-        D = number("D, diffusion coefficient (cm²/s)", DEFAULTS.D, "dssc_D")
-    with c2:
-        q = number("q, electron charge (C)", DEFAULTS.q, "dssc_q")
-        n0 = number("n₀, electron density (cm⁻³)", DEFAULTS.n0, "dssc_n0")
-    with c3:
-        L = number("L, diffusion length (cm)", DEFAULTS.L, "dssc_L")
-        m = number("m, ideality factor", DEFAULTS.m, "dssc_m")
-    with c4:
+        st.markdown("**Material and geometry**")
+        L = number("L, electron diffusion length (cm)", DEFAULTS.L, "dssc_L")
         d = number(
-            "d, film thickness = optical path length (cm)",
+            "d, TiO₂ film thickness = optical path length (cm)",
             DEFAULTS.d,
             "dssc_d",
             help="Also used as the path length in the Beer–Lambert law.",
         )
+        D = number("D, diffusion coefficient (cm²/s)", DEFAULTS.D, "dssc_D")
+        n0 = number("n₀, electron concentration (cm⁻³)", DEFAULTS.n0, "dssc_n0")
+    with c2:
+        st.markdown("**Physics**")
+        k = number("k, Boltzmann constant (J/K)", DEFAULTS.k, "dssc_k")
+        q = number("q, electron charge (C)", DEFAULTS.q, "dssc_q")
+        m = number("m, ideality factor", DEFAULTS.m, "dssc_m")
+    with c3:
+        st.markdown("**Light**")
         phi = number(
             "φ, photon flux at 1000 W/m² (cm⁻² s⁻¹)",
             DEFAULTS.phi,
             "dssc_phi",
-            help="Scaled in proportion to the irradiance you choose.",
+            help="Scaled in proportion to the light intensity you choose.",
         )
-    st.caption("The absorption coefficient α is set in the UV–Vis tab. Temperature is set per tab.")
-    if st.button("Reset to document defaults"):
-        for key in PARAM_KEYS:
-            st.session_state.pop(key, None)
-        st.rerun()
+        st.caption(
+            "Type numbers like 2.2361e-3 or 0.0022361. The absorption coefficient α is set in tab 1."
+        )
+        if st.button("Reset to document defaults"):
+            for key in PARAM_KEYS:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+edited_params = any(
+    not math.isclose(value, default, rel_tol=1e-9)
+    for value, default in (
+        (k, DEFAULTS.k),
+        (q, DEFAULTS.q),
+        (L, DEFAULTS.L),
+        (d, DEFAULTS.d),
+        (m, DEFAULTS.m),
+        (D, DEFAULTS.D),
+        (n0, DEFAULTS.n0),
+        (phi, DEFAULTS.phi),
+    )
+)
+status = st.empty()
 
 tab_uv, tab_eq, tab_sd, tab_vary = st.tabs(
     [
         "1 · UV–Vis → α",
-        "2 · DSSC equations",
+        "2 · Cell performance",
         "3 · Single-diode model",
-        "4 · Irradiation & temperature",
+        "4 · Light & temperature",
     ]
 )
 
@@ -100,12 +172,22 @@ uvvis_pairs: list[tuple[float, float]] = []
 uvvis_wavelength: float | None = None
 with tab_uv:
     st.markdown(
-        "Enter the wavelength and absorbance from your UV–Vis result (type into the table, or "
-        "upload a CSV with the columns `wavelength_nm` and `absorbance`). The absorption "
-        "coefficient comes from the Beer–Lambert law and feeds Equation 1."
+        "**What this does:** turns your UV–Vis absorbance into the absorption coefficient α with "
+        "the Beer–Lambert law. α then feeds Equation 1 (the short-circuit current)."
     )
     st.latex(r"\alpha = \frac{2.303\,A}{d}")
-    upload = st.file_uploader("Upload UV–Vis CSV (optional)", type="csv")
+    up_col, tpl_col = st.columns([4, 1], vertical_alignment="bottom")
+    upload = up_col.file_uploader("Upload a UV–Vis CSV (optional)", type="csv")
+    tpl_col.download_button(
+        "Download CSV template",
+        "wavelength_nm,absorbance\n",
+        file_name="uvvis_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.caption(
+        "Or type directly into the table below: click the empty row at the bottom to add a row."
+    )
     table = pd.DataFrame(
         {"wavelength_nm": pd.Series(dtype=float), "absorbance": pd.Series(dtype=float)}
     )
@@ -132,7 +214,10 @@ with tab_uv:
 
     use_uvvis = False
     if spectrum.empty:
-        st.info("No UV–Vis data yet, so the typed α below is used.")
+        st.info(
+            "No UV–Vis data yet, so the typed α below is used "
+            f"(the document's value is {DEFAULTS.alpha:g} cm⁻¹)."
+        )
     else:
         spectrum["alpha_cm1"] = absorption_coefficient(spectrum["absorbance"].to_numpy(), d)
         uvvis_pairs = list(
@@ -180,21 +265,28 @@ with tab_uv:
 
     if use_uvvis:
         alpha = alpha_uvvis
-        st.metric("α used by the model (cm⁻¹)", f"{alpha:,.1f}")
+        alpha_source = f"from UV–Vis at {uvvis_wavelength:g} nm"
+        st.success(f"The model will use α = {alpha:,.1f} cm⁻¹ ({alpha_source}).")
     else:
         uvvis_wavelength = None
         alpha = number("α, absorption coefficient (cm⁻¹)", DEFAULTS.alpha, "dssc_alpha")
+        alpha_source = "typed value"
 
 if bad_inputs:
     st.stop()
 
 params = DSSCParams(k=k, q=q, L=L, d=d, alpha=alpha, m=m, D=D, n0=n0, phi=phi)
+status.markdown(
+    f"**In use:** α = {alpha:,.0f} cm⁻¹ ({alpha_source}) · parameters: "
+    f"{'edited by you' if edited_params else 'document defaults'} · "
+    f"{temp:g} K · {irr:g} W/m² · {area:g} cm²"
+)
 
 
 # --- shared helpers -------------------------------------------------------------------
 
 
-def combined_plot(v: np.ndarray, i: np.ndarray, perf, title: str) -> None:
+def combined_plot(v: np.ndarray, i: np.ndarray, perf, title: str) -> None:  # type: ignore[no-untyped-def]
     """I–V (left axis) and P–V (right axis) with Isc, Voc, Imp, Vmp and Pmax marked."""
     current, power = i * 1e3, v * i * 1e3
     fig, ax = plt.subplots(figsize=(9.5, 4.8))
@@ -242,46 +334,51 @@ def show_results(perf, area: float, irradiance: float) -> None:  # type: ignore[
         f"FF = Pmax / (Voc × Isc); η = Jsc × Voc × FF / Pin × 100 with Pin = {perf.pin:g} mW/cm² "
         f"({irradiance:g} W/m²). Isc in mA assumes a cell area of {area:g} cm²."
     )
+    with st.expander("What do these numbers mean?"):
+        st.markdown(
+            "- **Voc** (open-circuit voltage): the voltage across the cell when no current flows.\n"
+            "- **Jsc** (short-circuit current density): the current per cm² when the cell is "
+            "shorted. **Isc** is the same current for the whole cell area.\n"
+            "- **Pmax**: the most power the cell can deliver, at the *maximum power point* "
+            "(**Vmp**, **Imp**).\n"
+            "- **Fill factor (FF)**: how “square” the I–V curve is: Pmax / (Voc × Jsc). "
+            "Closer to 1 is better.\n"
+            "- **Efficiency η**: the share of the incoming light power turned into electricity."
+        )
 
 
 def save_panel(  # type: ignore[no-untyped-def]
     key: str, model: str, p: DSSCParams, irradiance: float, area: float, perf, sd=None
 ) -> None:
-    left, right = st.columns([3, 1], vertical_alignment="bottom")
-    label = left.text_input("Label for this result (optional)", key=f"{key}_label")
-    if right.button("Save to database", key=f"{key}_save", use_container_width=True):
-        save_run(
-            session(),
-            operator=str(st.session_state.get("user", "owner")),
-            label=label,
-            model=model,
-            params=p,
-            irradiance=irradiance,
-            area_cm2=area,
-            perf=perf,
-            single_diode=sd,
-            uvvis=uvvis_pairs,
-            uvvis_wavelength_nm=uvvis_wavelength,
-        )
-        st.success("Saved. It appears in “Saved simulations” below.")
-
-
-def operating_point(prefix: str) -> tuple[float, float, float]:
-    """Temperature, irradiance and cell area for one tab."""
-    a, b, c = st.columns(3)
-    t = a.slider("Temperature (K)", 273, 375, 300, key=f"{prefix}_T")
-    g = b.number_input("Irradiance Pin (W/m²)", 50.0, 1500.0, 1000.0, step=10.0, key=f"{prefix}_G")
-    area = c.number_input(
-        "Cell area (cm²)", 0.01, 100.0, 1.0, step=0.1, key=f"{prefix}_A",
-        help="Only used to turn Jsc (mA/cm²) into Isc (mA).",
-    )  # fmt: skip
-    return float(t), float(g), float(area)
+    with st.container(border=True):
+        st.markdown("**Save this result to the database**")
+        left, right = st.columns([3, 1], vertical_alignment="bottom")
+        label = left.text_input("Label for this result (optional)", key=f"{key}_label")
+        if right.button("Save to database", key=f"{key}_save", use_container_width=True):
+            save_run(
+                session(),
+                operator=str(st.session_state.get("user", "owner")),
+                label=label,
+                model=model,
+                params=p,
+                irradiance=irradiance,
+                area_cm2=area,
+                perf=perf,
+                single_diode=sd,
+                uvvis=uvvis_pairs,
+                uvvis_wavelength_nm=uvvis_wavelength,
+            )
+            st.success("Saved. It appears in “Saved simulations” at the bottom of the page.")
 
 
 # --- tab 2: the document's four equations ---------------------------------------------
 
 with tab_eq:
-    with st.expander("Equations used"):
+    st.markdown(
+        "**What this does:** uses the four DSSC equations to calculate the cell's short-circuit "
+        "current, open-circuit voltage and full I–V curve at the conditions above."
+    )
+    with st.expander("Show the equations"):
         st.latex(
             r"I_{sc}=\frac{q\phi\alpha L}{1-L^2\alpha^2}\left[-L\alpha+\tanh\frac{d}{L}"
             r"+\frac{L\alpha\,e^{-d\alpha}}{\cosh(d/L)}\right]"
@@ -289,7 +386,6 @@ with tab_eq:
         st.latex(r"V_{oc}=\frac{kTm}{q}\ln\left[\frac{L I_{sc}}{qDn_0\tanh(d/L)}+1\right]")
         st.latex(r"V=\frac{kTm}{q}\ln\left[\frac{L(I_{sc}-I)}{qDn_0\tanh(d/L)}+1\right]")
         st.latex(r"I=I_{sc}-\frac{qDn_0}{L}\tanh\frac{d}{L}\left[e^{qV/(kTm)}-1\right]")
-    temp, irr, area = operating_point("eq")
     p_eq = replace(params, T=temp)
     try:
         v, i = equations_curve(p_eq, irr)
@@ -297,7 +393,6 @@ with tab_eq:
     except ValueError as error:
         st.error(str(error))
     else:
-        st.markdown(f"**α = {params.alpha:,.1f} cm⁻¹**, T = {temp:g} K, {irr:g} W/m²")
         show_results(perf, area, irr)
         combined_plot(v, i, perf, f"I–V and P–V (DSSC equations), T = {temp:g} K, {irr:g} W/m²")
         save_panel("eq", "equations", p_eq, irr, area, perf)
@@ -306,6 +401,10 @@ with tab_eq:
 
 SD_DEFAULTS = SingleDiodeParams()
 with tab_sd:
+    st.markdown(
+        "**What this does:** models the cell as a current source with a diode, a series "
+        "resistance Rs and a shunt resistance Rsh, and solves the equation below numerically."
+    )
     st.latex(
         r"I = I_{ph} - I_0\left[\exp\left(\frac{q(V+IR_s)}{nkT}\right)-1\right]"
         r"-\frac{V+IR_s}{R_{sh}}"
@@ -327,29 +426,19 @@ with tab_sd:
     with f:
         rsh = number("Rsh (Ω·cm²)", SD_DEFAULTS.rsh, "sd_rsh")
     sd = SingleDiodeParams(iph=iph * 1e-3, i0=i0, n=n_ideal, rs=rs, rsh=rsh)
-    temp_sd, irr_sd, area_sd = operating_point("sd")
-    p_sd = replace(params, T=temp_sd)
     if bad_inputs:
         st.stop()
     try:
-        v, i = single_diode_curve(p_sd, sd, irr_sd)
-        perf = performance(v, i, irr_sd)
+        v, i = single_diode_curve(p_eq, sd, irr)
+        perf = performance(v, i, irr)
     except ValueError as error:
         st.error(str(error))
     else:
-        show_results(perf, area_sd, irr_sd)
-        combined_plot(v, i, perf, f"I–V and P–V (single diode), T = {temp_sd:g} K, {irr_sd:g} W/m²")
-        save_panel("sd", "single_diode", p_sd, irr_sd, area_sd, perf, sd)
+        show_results(perf, area, irr)
+        combined_plot(v, i, perf, f"I–V and P–V (single diode), T = {temp:g} K, {irr:g} W/m²")
+        save_panel("sd", "single_diode", p_eq, irr, area, perf, sd)
 
 # --- tab 4: vary irradiation and temperature ------------------------------------------
-
-
-def parse_list(text: str) -> list[float] | None:
-    try:
-        values = [float(x) for x in text.replace(";", ",").split(",") if x.strip()]
-    except ValueError:
-        return None
-    return values if values and all(x > 0 for x in values) and len(values) <= 6 else None
 
 
 def curves_for(model: str, vary: str, values: list[float], fixed: float):  # type: ignore[no-untyped-def]
@@ -387,7 +476,7 @@ def family_table(curves, vary: str) -> None:  # type: ignore[no-untyped-def]
     st.dataframe(
         pd.DataFrame(
             {
-                "Irradiance" if vary == "G" else "Temperature": label,
+                "Light intensity" if vary == "G" else "Temperature": label,
                 "Voc (V)": perf.voc,
                 "Jsc (mA/cm²)": perf.jsc,
                 "Vmp (V)": perf.vmp,
@@ -412,51 +501,59 @@ def family_table(curves, vary: str) -> None:  # type: ignore[no-untyped-def]
 
 
 with tab_vary:
+    st.markdown(
+        "**What this does:** draws several I–V and P–V curves on one graph so you can see how "
+        "light intensity and temperature change the cell. The other condition comes from the "
+        "**Conditions** box above."
+    )
     model_choice = st.radio("Model", [EQUATIONS, SINGLE_DIODE], horizontal=True)
 
-    st.subheader("Different irradiation")
-    a, b = st.columns(2)
-    t_fixed = a.slider("Temperature (K)", 273, 375, 300, key="vary_T")
-    g_text = b.text_input("Irradiation levels (W/m²), comma separated", "320, 640, 1000")
-    levels = parse_list(g_text)
-    if levels is None:
-        st.error("Enter up to 6 positive numbers, e.g. 320, 640, 1000.")
+    st.subheader(f"Different light intensities (at {temp:g} K)")
+    levels = st.multiselect(
+        "Light intensities to compare (W/m²)",
+        LIGHT_LEVELS,
+        default=[320, 640, 1000],
+        max_selections=6,
+        key="vary_levels",
+    )
+    if not levels:
+        st.info("Pick at least one light intensity.")
     else:
         try:
-            curves = curves_for(model_choice, "G", levels, float(t_fixed))
+            curves = curves_for(model_choice, "G", sorted(levels), temp)
         except ValueError as error:
             st.error(str(error))
         else:
-            family_plots(curves, f"{t_fixed} K")
+            family_plots(curves, f"{temp:g} K")
             family_table(curves, "G")
 
-    st.subheader("Different temperature")
-    a, b = st.columns(2)
-    g_fixed = a.number_input("Irradiance (W/m²)", 50.0, 1500.0, 1000.0, step=10.0, key="vary_G")
-    t_text = b.text_input("Temperatures (K), comma separated", "273, 300, 325, 350, 375")
-    temps = parse_list(t_text)
-    if temps is None:
-        st.error("Enter up to 6 positive temperatures, e.g. 273, 300, 375.")
+    st.subheader(f"Different temperatures (at {irr:g} W/m²)")
+    temps = st.multiselect(
+        "Temperatures to compare (K)",
+        TEMPERATURES,
+        default=[273, 300, 325, 350, 375],
+        max_selections=6,
+        key="vary_temps",
+    )
+    if not temps:
+        st.info("Pick at least one temperature.")
     else:
-        if any(t < 273 or t > 375 for t in temps):
-            st.warning("The source document covers 273–375 K; values outside are extrapolated.")
         try:
-            curves = curves_for(model_choice, "T", temps, float(g_fixed))
+            curves = curves_for(model_choice, "T", sorted(temps), irr)
         except ValueError as error:
             st.error(str(error))
         else:
-            family_plots(curves, f"{g_fixed:g} W/m²")
+            family_plots(curves, f"{irr:g} W/m²")
             family_table(curves, "T")
-            if model_choice == EQUATIONS:
-                st.caption(
-                    "In these equations temperature only enters through kTm/q, so Voc rises "
-                    "slightly with T while Isc stays the same."
-                )
+            st.caption(
+                "In these equations temperature only enters through kTm/q (kT/q in the diode "
+                "term), so Voc rises with T while the photocurrent stays the same."
+            )
 
 # --- saved runs -----------------------------------------------------------------------
 
-st.subheader("Saved simulations")
 saved = runs_frame(session())
+st.subheader(f"Saved simulations ({len(saved)})")
 if saved.empty:
     empty_state("Nothing saved yet.", "Use “Save to database” under a result to keep it here.")
 else:
